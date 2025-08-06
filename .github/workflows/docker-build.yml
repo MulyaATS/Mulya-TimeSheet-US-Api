@@ -1,0 +1,95 @@
+name: Build and Push Docker Image (DEV & PROD)
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set Environment & Image Name
+        id: env_config
+        run: |
+          if [[ "${{ github.ref_name }}" == "develop" ]]; then
+            echo "ENV_SUFFIX=dev" >> $GITHUB_ENV
+            echo "IMAGE_NAME=dataquad123/mulya-dev-timesheet" >> $GITHUB_ENV
+          else
+            echo "ENV_SUFFIX=prod" >> $GITHUB_ENV
+            echo "IMAGE_NAME=dataquad123/mulya-dev-timesheet" >> $GITHUB_ENV
+          fi
+
+      # Create SSL directory and decode cert ONLY for prod (mirrors working prod pipeline style)
+      - name: Create SSL directory and decode cert for PROD
+        if: env.ENV_SUFFIX == 'prod'
+        run: |
+          mkdir -p nginx/ssl
+          echo "${{ secrets.MYMULYA_CRT_BASE64 }}" | base64 --decode > nginx/ssl/mymulya.crt
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Get Latest Version
+        run: |
+          LATEST_VERSION=$(curl -s https://hub.docker.com/v2/repositories/${{ env.IMAGE_NAME }}/tags/ | \
+            jq -r '.results[].name' | \
+            grep "^${{ env.ENV_SUFFIX }}-" | \
+            sed "s/^${{ env.ENV_SUFFIX }}-//" | \
+            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+            sort -V | tail -n 1)
+
+          if [ -z "$LATEST_VERSION" ]; then
+            NEW_VERSION="1.0.0"
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+            PATCH=$((PATCH + 1))
+            if [ "$PATCH" -ge 10 ]; then PATCH=0; MINOR=$((MINOR + 1)); fi
+            if [ "$MINOR" -ge 10 ]; then MINOR=0; MAJOR=$((MAJOR + 1)); fi
+            NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          fi
+
+          echo "IMAGE_TAG=$NEW_VERSION" >> $GITHUB_ENV
+
+      - name: Build and Push Docker Image
+        run: |
+          PORT=8092
+          if [[ "$ENV_SUFFIX" == "dev" ]]; then
+            PORT=8091
+          fi
+
+          docker build \
+            --build-arg SPRING_PROFILES_ACTIVE=$ENV_SUFFIX \
+            --build-arg PORT=$PORT \
+            -t $IMAGE_NAME:$ENV_SUFFIX-$IMAGE_TAG .
+
+          docker tag $IMAGE_NAME:$ENV_SUFFIX-$IMAGE_TAG $IMAGE_NAME:$ENV_SUFFIX-latest
+          docker tag $IMAGE_NAME:$ENV_SUFFIX-$IMAGE_TAG $IMAGE_NAME:latest
+
+          docker push $IMAGE_NAME:$ENV_SUFFIX-$IMAGE_TAG
+          docker push $IMAGE_NAME:$ENV_SUFFIX-latest
+          docker push $IMAGE_NAME:latest
+
+      - name: Delete Old Images (Keep Last 10)
+        run: |
+          OLD_TAGS=$(curl -s -u ${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }} \
+            "https://hub.docker.com/v2/repositories/$IMAGE_NAME/tags/" | \
+            jq -r '.results[].name' | \
+            grep "^$ENV_SUFFIX-" | \
+            sed "s/^$ENV_SUFFIX-//" | \
+            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+            sort -V | head -n -10)
+
+          for TAG in $OLD_TAGS; do
+            echo "Deleting: $ENV_SUFFIX-$TAG"
+            curl -X DELETE -u ${{ secrets.DOCKER_USERNAME }}:${{ secrets.DOCKER_PASSWORD }} \
+              "https://hub.docker.com/v2/repositories/$IMAGE_NAME/tags/$ENV_SUFFIX-$TAG/"
+          done

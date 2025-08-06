@@ -177,6 +177,31 @@ Use this page to explore, test, and learn about the API endpoints, request forma
 - Follow coding conventions and write tests
 - Submit detailed pull requests for review
 
+---
+
+## 🐳 Dockerfile
+
+Your repository contains a Dockerfile implementing a multi-stage build with SSL certificate import and configurable Spring profiles & ports. It creates a production-ready container image for the Timesheet microservice.
+
+Highlights:
+
+- Uses OpenJDK slim images (JDK 17) for build and runtime stages.
+- Installs Maven in the builder stage for dependency management and packaging.
+- Copies and imports a custom SSL certificate into the Java truststore for secure outgoing HTTPS connections.
+- Supports dynamic Spring profile and server port configuration via build arguments and environment variables.
+
+---
+
+## ⚙️ CI/CD Pipeline (GitHub Actions)
+
+Your project includes a GitHub Actions workflow (`docker-build.yml`) that automates:
+
+- Building Docker images for dev (`develop` branch) and prod (`master` branch).
+- Decoding and injecting your SSL certificate from GitHub Secrets during production builds.
+- Tagging images with semantic versioning that automatically increments patches.
+- Pushing images to Docker Hub.
+- Cleaning up old Docker tags while preserving the latest 10 per environment.
+---
 ## 📄 License
 
 Specify your license information here.
