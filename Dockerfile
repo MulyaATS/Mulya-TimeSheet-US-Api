@@ -19,22 +19,9 @@ FROM openjdk:21-jdk-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y ca-certificates && mkdir -p /etc/ssl/certs/custom
-
-COPY nginx/ssl/mymulya.crt /etc/ssl/certs/custom/mymulya.crt
-
-# Import certificate into Java truststore if exists
-RUN if [ -f /etc/ssl/certs/custom/mymulya.crt ]; then \
-      keytool -import -trustcacerts -alias mymulya_cert \
-        -file /etc/ssl/certs/custom/mymulya.crt \
-        -keystore $JAVA_HOME/lib/security/cacerts \
-        -storepass changeit -noprompt; \
-    else \
-      echo "Certificate file not found, skipping import"; \
-    fi
-
-ARG SPRING_PROFILES_ACTIVE=dev
-ARG PORT=7071
+# Accept environment profile and port
+ARG SPRING_PROFILES_ACTIVE=prod
+ARG PORT=8092
 
 ENV SPRING_PROFILES_ACTIVE=$SPRING_PROFILES_ACTIVE
 ENV PORT=$PORT
