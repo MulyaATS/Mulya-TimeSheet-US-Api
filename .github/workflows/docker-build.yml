@@ -25,13 +25,7 @@ jobs:
             echo "IMAGE_NAME=dataquad123/mulya-dev-timesheet" >> $GITHUB_ENV
           fi
 
-      # Create SSL directory and decode cert ONLY for prod (mirrors working prod pipeline style)
-      - name: Create SSL directory and decode cert for PROD
-        if: env.ENV_SUFFIX == 'prod'
-        run: |
-          mkdir -p nginx/ssl
-          echo "${{ secrets.MYMULYA_CRT_BASE64 }}" | base64 --decode > nginx/ssl/mymulya.crt
-
+    
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
