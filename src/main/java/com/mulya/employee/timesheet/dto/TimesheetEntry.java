@@ -1,10 +1,22 @@
 package com.mulya.employee.timesheet.dto;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+
+import java.time.LocalDate;
+
 public class TimesheetEntry {
     private String project;
     private double hours;
     private String description;
-    private String day;
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
+    private LocalDate date;
+    public LocalDate getDate() {
+        return date;
+    }
+
+    public void setDate(LocalDate date) {
+        this.date = date;
+    }
 
     public String getProject() {
         return project;

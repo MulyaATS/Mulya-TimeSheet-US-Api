@@ -8,6 +8,15 @@ public class UserDto {
     private String userName;
     private String email;
     private String employeeType;
+    private String role; // single enum role value
+
+    public String getRole() {
+        return role;
+    }
+
+    public void setRole(String role) {
+        this.role = role;
+    }
 
     public String getUserId() {
         return userId;
