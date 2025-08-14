@@ -1,10 +1,9 @@
 package com.mulya.employee.timesheet.model;
 
 import jakarta.persistence.*;
-
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-
+import java.util.List;
 @Entity
 @Table(name = "timesheets")
 public class Timesheet {
@@ -14,111 +13,106 @@ public class Timesheet {
     private Long id;
 
     @Column(nullable = false)
-    private String userId;
+    private String userId; // ID from User microservice
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private TimesheetType timesheetType;
+    private TimesheetType timesheetType; // DAILY or WEEKLY
 
+    /**
+     * For DAILY: the specific date of the timesheet
+     * For WEEKLY: the Monday of the week
+     */
     @Column(nullable = false)
-    private LocalDate timesheetDate; // For daily: date, for weekly: week start
+    private LocalDate timesheetDate;
 
-    @Column(length = 5000)
+    /**
+     * For weekly entries: start and end of the week
+     * For daily: startDate == endDate == timesheetDate
+     */
+    private LocalDate weekStartDate;
+    private LocalDate weekEndDate;
+
+    /**
+     * JSON of all entries for this day/week
+     */
+    @Column(length = 10000)
     private String entries;
 
     @Column(nullable = false)
-    private Double percentageOfTarget;
-
-
-    @Column(nullable = false)
-    private String employeeType;
+    private Double percentageOfTarget; // e.g. hours / 40 * 100
 
     @Column(nullable = false)
+    private String employeeType; // INTERNAL or EXTERNAL
+
+    // Workflow status: DRAFT, PENDING_APPROVAL, APPROVED, REJECTED, LOCKED
+    private String status;
+
+    private String approvedBy;
+    private LocalDateTime approvedAt;
+
+    @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @Column(nullable = false)
     private LocalDateTime updatedAt;
 
     @PrePersist
-    public void prePersist() {
+    public void onCreate() {
         createdAt = LocalDateTime.now();
         updatedAt = createdAt;
     }
 
     @PreUpdate
-    public void preUpdate() {
+    public void onUpdate() {
         updatedAt = LocalDateTime.now();
     }
 
-    public Long getId() {
-        return id;
-    }
+    @OneToMany(mappedBy = "timesheet", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private List<Attachment> attachments;
 
-    public void setId(Long id) {
-        this.id = id;
-    }
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
 
-    public String getUserId() {
-        return userId;
-    }
+    public String getUserId() { return userId; }
+    public void setUserId(String userId) { this.userId = userId; }
 
-    public void setUserId(String userId) {
-        this.userId = userId;
-    }
+    public TimesheetType getTimesheetType() { return timesheetType; }
+    public void setTimesheetType(TimesheetType timesheetType) { this.timesheetType = timesheetType; }
 
-    public TimesheetType getTimesheetType() {
-        return timesheetType;
-    }
+    public LocalDate getTimesheetDate() { return timesheetDate; }
+    public void setTimesheetDate(LocalDate timesheetDate) { this.timesheetDate = timesheetDate; }
 
-    public void setTimesheetType(TimesheetType timesheetType) {
-        this.timesheetType = timesheetType;
-    }
+    public LocalDate getWeekStartDate() { return weekStartDate; }
+    public void setWeekStartDate(LocalDate weekStartDate) { this.weekStartDate = weekStartDate; }
 
-    public LocalDate getTimesheetDate() {
-        return timesheetDate;
-    }
+    public LocalDate getWeekEndDate() { return weekEndDate; }
+    public void setWeekEndDate(LocalDate weekEndDate) { this.weekEndDate = weekEndDate; }
 
-    public void setTimesheetDate(LocalDate timesheetDate) {
-        this.timesheetDate = timesheetDate;
-    }
+    public String getEntries() { return entries; }
+    public void setEntries(String entries) { this.entries = entries; }
 
-    public String getEntries() {
-        return entries;
-    }
+    public Double getPercentageOfTarget() { return percentageOfTarget; }
+    public void setPercentageOfTarget(Double percentageOfTarget) { this.percentageOfTarget = percentageOfTarget; }
 
-    public void setEntries(String entries) {
-        this.entries = entries;
-    }
+    public String getEmployeeType() { return employeeType; }
+    public void setEmployeeType(String employeeType) { this.employeeType = employeeType; }
 
-    public Double getPercentageOfTarget() {
-        return percentageOfTarget;
-    }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
 
-    public void setPercentageOfTarget(Double percentageOfTarget) {
-        this.percentageOfTarget = percentageOfTarget;
-    }
+    public String getApprovedBy() { return approvedBy; }
+    public void setApprovedBy(String approvedBy) { this.approvedBy = approvedBy; }
 
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
+    public LocalDateTime getApprovedAt() { return approvedAt; }
+    public void setApprovedAt(LocalDateTime approvedAt) { this.approvedAt = approvedAt; }
 
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
-    }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
-    }
-
-    public String getEmployeeType() {
-        return employeeType;
-    }
-
-    public void setEmployeeType(String employeeType) {
-        this.employeeType = employeeType;
-    }
+    public List<Attachment> getAttachments() { return attachments; }
+    public void setAttachments(List<Attachment> attachments) { this.attachments = attachments;}
 }
