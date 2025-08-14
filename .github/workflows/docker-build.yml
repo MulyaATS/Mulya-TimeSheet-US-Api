@@ -22,7 +22,7 @@ jobs:
             echo "IMAGE_NAME=dataquad123/mulya-dev-timesheet" >> $GITHUB_ENV
           else
             echo "ENV_SUFFIX=prod" >> $GITHUB_ENV
-            echo "IMAGE_NAME=dataquad123/mulya-dev-timesheet" >> $GITHUB_ENV
+            echo "IMAGE_NAME=dataquad123/mulya-prod-timesheet" >> $GITHUB_ENV
           fi
 
       # Create SSL directory and decode cert ONLY for prod (mirrors working prod pipeline style)
