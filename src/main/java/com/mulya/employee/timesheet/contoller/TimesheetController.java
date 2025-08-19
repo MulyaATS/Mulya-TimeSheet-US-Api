@@ -6,6 +6,7 @@ import com.mulya.employee.timesheet.client.UserRegisterClient;
 import com.mulya.employee.timesheet.dto.*;
 import com.mulya.employee.timesheet.model.Attachment;
 import com.mulya.employee.timesheet.model.Timesheet;
+import com.mulya.employee.timesheet.model.TimesheetType;
 import com.mulya.employee.timesheet.repository.AttachmentRepository;
 import com.mulya.employee.timesheet.service.TimesheetService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -199,17 +200,40 @@ public class TimesheetController {
                 null
         ));
     }
+    @PatchMapping("/update-timesheet-entries/{id}")
+    public ResponseEntity<ApiResponse<TimesheetResponse>> updateTimesheetEntries(
+            @PathVariable Long id,
+            @RequestParam String userId,
+            @Valid @RequestBody List<TimesheetEntry> updatedEntries) throws Exception {
+
+        Timesheet updated = timesheetService.updateTimesheetEntries(id, userId, updatedEntries);
+        return ResponseEntity.ok(ApiResponse.success(
+                "Entries updated successfully",
+                map(updated)
+        ));
+    }
+
+
     @PutMapping("update-timesheet/{id}")
-    public ResponseEntity<ApiResponse<TimesheetResponse>> updateTimesheet(
+    public ResponseEntity<ApiResponse<TimesheetResponse>> updateWeeklyTimesheet(
             @PathVariable Long id,
             @RequestParam String userId,
             @Valid @RequestBody TimesheetRequest request) throws Exception {
 
+        if (request.getType() != TimesheetType.WEEKLY) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(
+                    "Invalid timesheet type for this endpoint",
+                    "400",
+                    "Only WEEKLY timesheets can be updated via this method"
+            ));
+        }
+
         Timesheet updated = timesheetService.updateTimesheet(id, userId, request);
         return ResponseEntity.ok(ApiResponse.success(
-                "Timesheet updated successfully",
-                map(updated)   // reuse your private map() to convert entity to TimesheetResponse
+                "Weekly timesheet updated successfully",
+                map(updated)  // your existing mapping method
         ));
     }
+
 
 }
