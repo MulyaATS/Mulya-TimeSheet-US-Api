@@ -1,4 +1,3 @@
-# -------- Build Stage --------
 FROM openjdk:21-jdk-slim AS builder
 
 RUN apt-get update && \
