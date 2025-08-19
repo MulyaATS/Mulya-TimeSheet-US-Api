@@ -10,6 +10,7 @@ import com.mulya.employee.timesheet.model.Timesheet;
 import com.mulya.employee.timesheet.model.TimesheetType;
 import com.mulya.employee.timesheet.repository.AttachmentRepository;
 import com.mulya.employee.timesheet.repository.TimesheetRepository;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -208,6 +209,40 @@ public class TimesheetService {
 
         return timesheetRepository.save(ts);
     }
+    public TimesheetSummaryDto toSummaryDto(Timesheet ts) {
+        TimesheetSummaryDto dto = new TimesheetSummaryDto();
+        dto.setId(ts.getId());
+        dto.setUserId(ts.getUserId());
+        dto.setEmployeeType(ts.getEmployeeType());
+        dto.setTimesheetType(ts.getTimesheetType());
+        dto.setWeekStartDate(ts.getWeekStartDate());
+        dto.setWeekEndDate(ts.getWeekEndDate());
+        dto.setStatus(ts.getStatus());
+
+        List<UserInfoDto> userInfoList = userRegisterClient.getUserInfos(ts.getUserId());
+        dto.setEmployeeName(userInfoList.isEmpty() ? "Unknown" : userInfoList.get(0).getUserName());
+
+        return dto;
+    }
+
+    public TimesheetApprovalDto toApprovalDto(Timesheet ts, String managerUserId) {
+        TimesheetApprovalDto dto = new TimesheetApprovalDto();
+        dto.setId(ts.getId());
+        dto.setUserId(ts.getUserId());
+
+        List<UserInfoDto> userInfoList = userRegisterClient.getUserInfos(ts.getUserId());
+        dto.setEmployeeName(userInfoList.isEmpty() ? "Unknown" : userInfoList.get(0).getUserName());
+
+        dto.setApproveId(managerUserId);
+        List<UserInfoDto> managerInfoList = userRegisterClient.getUserInfos(managerUserId);
+        dto.setApprovedBy(managerInfoList.isEmpty() ? "Unknown" : managerInfoList.get(0).getUserName());
+
+        dto.setWeekStartDate(ts.getWeekStartDate());
+        dto.setWeekEndDate(ts.getWeekEndDate());
+
+        return dto;
+    }
+
 
     private double calculateTotalHours(List<TimesheetEntry> entries) {
         if (entries == null || entries.isEmpty()) {
@@ -268,16 +303,72 @@ public class TimesheetService {
 
         return resp;
     }
-
-
+    @Transactional
     public Timesheet updateTimesheet(Long id, String userId, TimesheetRequest req) throws Exception {
         Timesheet ts = timesheetRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Timesheet not found"));
+
+        if (!ts.getUserId().equals(userId)) {
+            throw new SecurityException("Unauthorized to update this timesheet");
+        }
+
+        // Confirm type is WEEKLY to prevent misuse
+        if (req.getType() != TimesheetType.WEEKLY) {
+            throw new IllegalArgumentException("Only WEEKLY timesheet can be updated with this method");
+        }
+
         ts.setTimesheetType(req.getType());
         ts.setTimesheetDate(req.getDate());
-        ts.setEntries(new ObjectMapper().writeValueAsString(req.getEntries()));
-        double target = (req.getType() == TimesheetType.DAILY) ? 8.0 : 40.0;
-        ts.setPercentageOfTarget((calculateTotalHours(req.getEntries()) / target) * 100);
+
+        // Use injected mapper for serialization
+        ts.setEntries(mapper.writeValueAsString(req.getEntries()));
+
+        double totalHours = calculateTotalHours(req.getEntries());
+        ts.setPercentageOfTarget((totalHours / 40.0) * 100);
+
+        return timesheetRepository.save(ts);
+    }
+
+    @Transactional
+    public Timesheet updateTimesheetEntries(Long timesheetId, String userId, List<TimesheetEntry> updatedEntries) throws Exception {
+        Timesheet ts = timesheetRepository.findById(timesheetId)
+                .orElseThrow(() -> new IllegalArgumentException("Timesheet not found"));
+
+        if (!ts.getUserId().equals(userId)) {
+            throw new SecurityException("Unauthorized to update this timesheet");
+        }
+
+        List<TimesheetEntry> currentEntries = mapper.readValue(ts.getEntries(), new TypeReference<List<TimesheetEntry>>() {});
+
+        for (TimesheetEntry updatedEntry : updatedEntries) {
+            boolean matched = false;
+            for (int i = 0; i < currentEntries.size(); i++) {
+                TimesheetEntry existingEntry = currentEntries.get(i);
+                if (existingEntry.getDate().equals(updatedEntry.getDate())) {
+                    // Merge non-null fields only
+                    if (updatedEntry.getProject() != null) existingEntry.setProject(updatedEntry.getProject());
+                    if (updatedEntry.getHours() != null) existingEntry.setHours(updatedEntry.getHours());
+                    if (updatedEntry.getDescription() != null) existingEntry.setDescription(updatedEntry.getDescription());
+                    // Add other fields with same condition as needed
+
+                    currentEntries.set(i, existingEntry);
+                    matched = true;
+                    break;
+                }
+            }
+
+            // Optionally add new entry if not matched
+            if (!matched) {
+                currentEntries.add(updatedEntry);
+            }
+        }
+
+        ts.setEntries(mapper.writeValueAsString(currentEntries));
+
+        double target = ts.getTimesheetType() == TimesheetType.DAILY ? 8.0 : 40.0;
+        double totalHours = currentEntries.stream().mapToDouble(TimesheetEntry::getHours).sum();
+        ts.setPercentageOfTarget((totalHours / target) * 100);
+
         return timesheetRepository.save(ts);
     }
 
@@ -316,4 +407,7 @@ public class TimesheetService {
         }
         timesheetRepository.deleteById(id);
     }
+
+
 }
+

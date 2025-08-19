@@ -6,7 +6,7 @@ import java.time.LocalDate;
 
 public class TimesheetEntry {
     private String project;
-    private double hours;
+    private Double hours;
     private String description;
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
     private LocalDate date;
@@ -26,11 +26,11 @@ public class TimesheetEntry {
         this.project = project;
     }
 
-    public double getHours() {
+    public Double  getHours() {
         return hours;
     }
 
-    public void setHours(double hours) {
+    public void setHours(Double hours) {
         this.hours = hours;
     }
 
