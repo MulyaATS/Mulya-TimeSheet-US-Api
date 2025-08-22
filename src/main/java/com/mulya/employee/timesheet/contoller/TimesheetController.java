@@ -44,43 +44,52 @@ public class TimesheetController {
     private AttachmentRepository attachmentRepository;
 
     @PostMapping("/daily-entry")
-    public ResponseEntity<ApiResponse<TimesheetResponse>> saveDailyEntry(
+    public ResponseEntity<ApiResponse<TimesheetSummaryDto>> saveDailyEntry(
             @RequestParam String userId,
             @Valid @RequestBody TimesheetRequest request) {
         Timesheet ts = timesheetService.createTimesheet(userId, request);
-        TimesheetResponse resp = new TimesheetResponse();
-        resp.setId(ts.getId());
-        resp.setUserId(ts.getUserId());
-        resp.setEmployeeType(ts.getEmployeeType());
-        resp.setTimesheetType(ts.getTimesheetType());
-        resp.setStatus(ts.getStatus());
-        return ResponseEntity.ok(ApiResponse.success("Entry saved", resp));
+        TimesheetSummaryDto summaryDto = timesheetService.toSummaryDto(ts);
+        return ResponseEntity.ok(ApiResponse.success("Entry saved", summaryDto));
     }
 
     @PostMapping("/submit-weekly")
-    public ResponseEntity<ApiResponse<TimesheetResponse>> submitWeekly(
+    public ResponseEntity<ApiResponse<TimesheetApprovalDto>> submitWeekly(
             @RequestParam String userId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStart) {
         Timesheet ts = timesheetService.submitWeekly(userId, weekStart);
-        return ResponseEntity.ok(ApiResponse.success("Submitted for approval", map(ts)));
+
+        UserDto managerDto = userRegisterClient.getUsersByRole("ACCOUNTS")
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("No ACCOUNTS manager"));
+
+        TimesheetApprovalDto approvalDto = timesheetService.toApprovalDto(ts, managerDto.getUserId());
+
+        return ResponseEntity.ok(ApiResponse.success("Submitted for approval", approvalDto));
     }
 
+
     @PostMapping("/approve")
-    public ResponseEntity<ApiResponse<TimesheetResponse>> approve(
+    public ResponseEntity<ApiResponse<TimesheetApprovalDto>> approve(
             @RequestParam Long timesheetId,
-            @RequestParam String userId) { // <- This is the manager's own user ID
+            @RequestParam String userId) {  // manager's own user ID
         Timesheet ts = timesheetService.approveTimesheet(timesheetId, userId);
-        return ResponseEntity.ok(ApiResponse.success("Timesheet approved", map(ts)));
+
+        TimesheetApprovalDto approvalDto = timesheetService.toApprovalDto(ts, userId);
+
+        return ResponseEntity.ok(ApiResponse.success("Timesheet approved", approvalDto));
     }
 
     @PostMapping("/reject")
-    public ResponseEntity<ApiResponse<TimesheetResponse>> reject(
+    public ResponseEntity<ApiResponse<TimesheetApprovalDto>> reject(
             @RequestParam Long timesheetId,
-            @RequestParam String userId,   // Manager's own userId
+            @RequestParam String userId,
             @RequestParam String reason) {
-
         Timesheet ts = timesheetService.rejectTimesheet(timesheetId, userId, reason);
-        return ResponseEntity.ok(ApiResponse.success("Timesheet rejected", map(ts)));
+
+        TimesheetApprovalDto approvalDto = timesheetService.toApprovalDto(ts, userId);
+
+        return ResponseEntity.ok(ApiResponse.success("Timesheet rejected", approvalDto));
     }
 
     @GetMapping("/getTimesheetsByUserId")
@@ -89,48 +98,12 @@ public class TimesheetController {
         return ResponseEntity.ok(ApiResponse.success("Timesheets retrieved", responses));
     }
 
-    private TimesheetResponse map(Timesheet ts) {
-        TimesheetResponse resp = new TimesheetResponse();
-        resp.setId(ts.getId());
-        resp.setUserId(ts.getUserId());
-        resp.setEmployeeType(ts.getEmployeeType());
-        resp.setTimesheetType(ts.getTimesheetType());
-        resp.setTimesheetDate(ts.getTimesheetDate());
-        resp.setWeekStartDate(ts.getWeekStartDate());
-        resp.setWeekEndDate(ts.getWeekEndDate());
-
-        try {
-            resp.setEntries(mapper.readValue(ts.getEntries(), new TypeReference<List<TimesheetEntry>>() {}));
-        } catch (Exception e) {
-            // Log detailed error for debugging
-            System.err.println("❌ Failed to parse 'entries' JSON for Timesheet ID: " + ts.getId());
-            System.err.println("Raw DB value: " + ts.getEntries());
-            e.printStackTrace();
-            resp.setEntries(List.of()); // return empty list to avoid null issues
-        }
-
-        resp.setPercentageOfTarget(ts.getPercentageOfTarget());
-        resp.setStatus(ts.getStatus());
-        resp.setApprovedBy(ts.getApprovedBy());
-        resp.setApprovedAt(ts.getApprovedAt());
-        if (ts.getAttachments() != null) {
-            List<AttachmentDto> attachmentDtos = ts.getAttachments()
-                    .stream()
-                    .map(att -> new AttachmentDto(
-                            att.getId(),
-                            att.getFilename(),
-                            att.getFiletype(),
-                            att.getUploadedAt()
-                    ))
-                    .collect(Collectors.toList());
-            resp.setAttachments(attachmentDtos);
-        } else {
-            resp.setAttachments(List.of());
-        }
-        return resp;
+    @GetMapping("/getAllTimesheets")
+    public ResponseEntity<ApiResponse<List<TimesheetResponse>>> getAllTimesheets() {
+        List<TimesheetResponse> responses = timesheetService.getAllTimesheets();
+        return ResponseEntity.ok(ApiResponse.success("All timesheets retrieved", responses));
     }
 
-    // === UPLOAD ATTACHMENTS ===
     @PostMapping("/{id}/attachments")
     public ResponseEntity<ApiResponse<List<AttachmentUploadResponse>>> uploadTimesheetAttachments(
             @PathVariable Long id,
@@ -158,9 +131,9 @@ public class TimesheetController {
     }
 
     // === LIST ATTACHMENTS ===
-    @GetMapping("/{id}/attachments")
-    public ResponseEntity<ApiResponse<List<AttachmentDto>>> listAttachments(@PathVariable Long id) {
-        List<AttachmentDto> attachments = attachmentRepository.findByTimesheetId(id)
+    @GetMapping("/{timesheetId}/attachments")
+    public ResponseEntity<ApiResponse<List<AttachmentDto>>> listAttachments(@PathVariable String timesheetId) {
+        List<AttachmentDto> attachments = attachmentRepository.findByTimesheetTimesheetId(timesheetId)  // Note updated method
                 .stream()
                 .map(att -> new AttachmentDto(
                         att.getId(),
@@ -201,21 +174,18 @@ public class TimesheetController {
         ));
     }
     @PatchMapping("/update-timesheet-entries/{id}")
-    public ResponseEntity<ApiResponse<TimesheetResponse>> updateTimesheetEntries(
+    public ResponseEntity<ApiResponse<TimesheetSummaryDto>> updateTimesheetEntries(
             @PathVariable Long id,
             @RequestParam String userId,
-            @Valid @RequestBody List<TimesheetEntry> updatedEntries) throws Exception {
+            @Valid @RequestBody TimesheetEntriesUpdateRequest updatedEntriesRequest) throws Exception {
 
-        Timesheet updated = timesheetService.updateTimesheetEntries(id, userId, updatedEntries);
-        return ResponseEntity.ok(ApiResponse.success(
-                "Entries updated successfully",
-                map(updated)
-        ));
+        Timesheet updated = timesheetService.updateTimesheetEntries(id, userId, updatedEntriesRequest.getWorkingEntries(),updatedEntriesRequest.getNonWorkingEntries());
+        TimesheetSummaryDto summaryDto = timesheetService.toSummaryDto(updated);
+        return ResponseEntity.ok(ApiResponse.success("Entries updated successfully", summaryDto));
     }
 
-
-    @PutMapping("update-timesheet/{id}")
-    public ResponseEntity<ApiResponse<TimesheetResponse>> updateWeeklyTimesheet(
+    @PutMapping("/update-timesheet/{id}")
+    public ResponseEntity<ApiResponse<TimesheetSummaryDto>> updateWeeklyTimesheet(
             @PathVariable Long id,
             @RequestParam String userId,
             @Valid @RequestBody TimesheetRequest request) throws Exception {
@@ -229,11 +199,7 @@ public class TimesheetController {
         }
 
         Timesheet updated = timesheetService.updateTimesheet(id, userId, request);
-        return ResponseEntity.ok(ApiResponse.success(
-                "Weekly timesheet updated successfully",
-                map(updated)  // your existing mapping method
-        ));
+        TimesheetSummaryDto summaryDto = timesheetService.toSummaryDto(updated);
+        return ResponseEntity.ok(ApiResponse.success("Weekly timesheet updated successfully", summaryDto));
     }
-
-
 }

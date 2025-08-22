@@ -5,7 +5,7 @@ import com.mulya.employee.timesheet.model.TimesheetType;
 import java.time.LocalDate;
 
 public class TimesheetSummaryDto {
-    private Long id;
+    private String timesheetId;
     private String userId;
     private String employeeName;
     private String employeeType;
@@ -14,13 +14,12 @@ public class TimesheetSummaryDto {
     private LocalDate weekEndDate;
     private String status;
 
-    public Long getId() {
-        return id;
+    public String getTimesheetId() {
+        return timesheetId;
     }
-
-    public void setId(Long id) {
-        this.id = id;
-    }
+    public void setTimesheetId(String timesheetId) {
+            this.timesheetId = timesheetId;
+        }
 
     public String getUserId() {
         return userId;

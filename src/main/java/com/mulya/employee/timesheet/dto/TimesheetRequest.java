@@ -16,19 +16,36 @@ public class TimesheetRequest {
     private LocalDate date;
 
     @NotNull(message = "Entries JSON cannot be null")
-    private List<TimesheetEntry> entries;
+    private List<TimesheetEntry> workingEntries;
+
+    @NotNull(message = "Entries JSON cannot be null")
+    private List<TimesheetEntry> nonWorkingEntries;
+
+    private String notes;
     // Getters and setters
+
+    public String getNotes() {
+        return notes;
+    }
+    public void setNotes(String notes) {
+        if (notes != null && notes.length() > 500) {
+            throw new IllegalArgumentException("Notes cannot exceed 500 characters");
+        }
+        this.notes = notes;
+    }
     public TimesheetType getType() { return type; }
     public void setType(TimesheetType type) { this.type = type; }
 
     public LocalDate getDate() { return date; }
     public void setDate(LocalDate date) { this.date = date; }
+    public List<TimesheetEntry> getWorkingEntries() { return workingEntries; }
 
-    public List<TimesheetEntry> getEntries() {
-        return entries;
+    public void setWorkingEntries(List<TimesheetEntry> workingEntries) {
+        this.workingEntries = workingEntries;
     }
-
-    public void setEntries(List<TimesheetEntry> entries) {
-        this.entries = entries;
+    public List<TimesheetEntry> getNonWorkingEntries() {
+        return nonWorkingEntries;
     }
+    public void setNonWorkingEntries(List<TimesheetEntry> nonWorkingEntries) {
+        this.nonWorkingEntries = nonWorkingEntries;}
 }

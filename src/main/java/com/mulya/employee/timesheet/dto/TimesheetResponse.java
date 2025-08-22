@@ -6,11 +6,14 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 public class TimesheetResponse {
-    private Long id;
+    private String timesheetId;
     private String userId;
+    private String employeeName;
     private String employeeType;
     private TimesheetType timesheetType;
-    private List<TimesheetEntry> entries;
+    private List<TimesheetEntry> workingEntries;
+    private List<TimesheetEntry> nonWorkingEntries;
+    // getters and setters
     private LocalDate timesheetDate;
     private LocalDate weekStartDate;
     private LocalDate weekEndDate;
@@ -19,9 +22,49 @@ public class TimesheetResponse {
     private String approvedBy;
     private LocalDateTime approvedAt;
     private List<AttachmentDto> attachments;
+    private String notes;
+    private String approver;
 
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
+
+    public String getNotes() {
+        return notes;
+    }
+    public void setNotes(String notes) {
+        if (notes != null && notes.length() > 500) {
+            throw new IllegalArgumentException("Notes cannot exceed 500 characters");
+        }
+        this.notes = notes;
+    }
+
+    private LocalDate startDate;
+    private String clientName;
+
+    public LocalDate getStartDate() {
+        return startDate;
+    }
+    public void setStartDate(LocalDate startDate) {
+        this.startDate = startDate;
+    }
+
+    public String getClientName() {
+        return clientName;
+    }
+    public void setClientName(String clientName) {
+        this.clientName = clientName;
+    }
+
+    public String getApprover() {
+        return approver;
+    }
+    public void setApprover(String approver) {
+        this.approver = approver;
+    }
+
+    public String getEmployeeName() { return employeeName; }
+    public void setEmployeeName(String employeeName) { this.employeeName = employeeName; }
+
+    public String getTimesheetId() { return timesheetId; }
+    public void setTimesheetId(String timesheetId) { this.timesheetId = timesheetId; }
 
     public String getUserId() { return userId; }
     public void setUserId(String userId) { this.userId = userId; }
@@ -32,8 +75,11 @@ public class TimesheetResponse {
     public TimesheetType getTimesheetType() { return timesheetType; }
     public void setTimesheetType(TimesheetType timesheetType) { this.timesheetType = timesheetType; }
 
-    public List<TimesheetEntry> getEntries() { return entries; }
-    public void setEntries(List<TimesheetEntry> entries) { this.entries = entries; }
+    public List<TimesheetEntry> getWorkingEntries() { return workingEntries; }
+    public void setWorkingEntries(List<TimesheetEntry> workingEntries) { this.workingEntries = workingEntries; }
+
+    public List<TimesheetEntry> getNonWorkingEntries() { return nonWorkingEntries; }
+    public void setNonWorkingEntries(List<TimesheetEntry> nonWorkingEntries) { this.nonWorkingEntries = nonWorkingEntries; }
 
     public LocalDate getTimesheetDate() { return timesheetDate; }
     public void setTimesheetDate(LocalDate timesheetDate) { this.timesheetDate = timesheetDate; }

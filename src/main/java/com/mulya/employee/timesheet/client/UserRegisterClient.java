@@ -111,4 +111,12 @@ public class UserRegisterClient {
             user.setEmployeeType("INTERNAL");
         }
     }
+
+    public UserDto getUserNameByRole(String roleName) {
+        List<UserDto> users = getUsersByRole(roleName);
+        if (users.isEmpty()) {
+            throw new ResourceNotFoundException("No user found with role: " + roleName);
+        }
+        return users.get(0); // Return the first user found with the specified role
+    }
 }
