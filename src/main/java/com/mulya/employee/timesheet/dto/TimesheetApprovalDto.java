@@ -3,7 +3,7 @@ package com.mulya.employee.timesheet.dto;
 import java.time.LocalDate;
 
 public class TimesheetApprovalDto {
-    private Long id;
+    private String timesheetId;
     private String userId;          // Employee userId
     private String employeeName;
     private String approveId;       // Manager userId
@@ -11,12 +11,11 @@ public class TimesheetApprovalDto {
     private LocalDate weekStartDate;
     private LocalDate weekEndDate;
 
-    public Long getId() {
-        return id;
+    public String getTimesheetId() {
+        return timesheetId;
     }
-
-    public void setId(Long id) {
-        this.id = id;
+    public void setTimesheetId(String timesheetId) {
+        this.timesheetId = timesheetId;
     }
 
     public String getUserId() {

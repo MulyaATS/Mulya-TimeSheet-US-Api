@@ -9,8 +9,8 @@ import java.util.List;
 public class Timesheet {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @Column(name = "timesheet_id", length = 12)
+    private String timesheetId;   // replaces Long id field
 
     @Column(nullable = false)
     private String userId; // ID from User microservice
@@ -36,17 +36,25 @@ public class Timesheet {
     /**
      * JSON of all entries for this day/week
      */
-    @Column(length = 10000)
-    private String entries;
+    @Lob
+    @Column(columnDefinition = "TEXT")
+    private String nonWorkingHours;
+
+    @Lob
+    @Column(columnDefinition = "TEXT")
+    private String workingHours;
+
 
     @Column(nullable = false)
     private Double percentageOfTarget; // e.g. hours / 40 * 100
 
     @Column(nullable = false)
-    private String employeeType; // INTERNAL or EXTERNAL
+    private String employeeType;
 
-    // Workflow status: DRAFT, PENDING_APPROVAL, APPROVED, REJECTED, LOCKED
+
     private String status;
+
+    private String notes;
 
     private String approvedBy;
     private LocalDateTime approvedAt;
@@ -71,8 +79,8 @@ public class Timesheet {
     @OneToMany(mappedBy = "timesheet", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<Attachment> attachments;
 
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
+    public String getTimesheetId() { return timesheetId; }
+    public void setTimesheetId(String timesheetId) { this.timesheetId = timesheetId; }
 
     public String getUserId() { return userId; }
     public void setUserId(String userId) { this.userId = userId; }
@@ -89,8 +97,11 @@ public class Timesheet {
     public LocalDate getWeekEndDate() { return weekEndDate; }
     public void setWeekEndDate(LocalDate weekEndDate) { this.weekEndDate = weekEndDate; }
 
-    public String getEntries() { return entries; }
-    public void setEntries(String entries) { this.entries = entries; }
+    public String getWorkingHours() { return workingHours; }
+    public void setWorkingHours(String workingHours) { this.workingHours = workingHours; }
+
+    public String getNonWorkingHours() { return nonWorkingHours; }
+    public void setNonWorkingHours(String nonWorkingHours) { this.nonWorkingHours = nonWorkingHours; }
 
     public Double getPercentageOfTarget() { return percentageOfTarget; }
     public void setPercentageOfTarget(Double percentageOfTarget) { this.percentageOfTarget = percentageOfTarget; }
@@ -115,4 +126,10 @@ public class Timesheet {
 
     public List<Attachment> getAttachments() { return attachments; }
     public void setAttachments(List<Attachment> attachments) { this.attachments = attachments;}
+
+    public String getNotes() {
+        return notes;
+    }
+    public void setNotes(String notes) {
+        this.notes = notes;}
 }
