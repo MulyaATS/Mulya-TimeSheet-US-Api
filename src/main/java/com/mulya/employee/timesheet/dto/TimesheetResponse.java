@@ -9,11 +9,11 @@ public class TimesheetResponse {
     private String timesheetId;
     private String userId;
     private String employeeName;
-    private String employeeType;
+    private String employeeRoleType;
     private TimesheetType timesheetType;
     private List<TimesheetEntry> workingEntries;
     private List<TimesheetEntry> nonWorkingEntries;
-    // getters and setters
+    private String employeeType;
     private LocalDate timesheetDate;
     private LocalDate weekStartDate;
     private LocalDate weekEndDate;
@@ -68,6 +68,9 @@ public class TimesheetResponse {
 
     public String getUserId() { return userId; }
     public void setUserId(String userId) { this.userId = userId; }
+
+    public String getEmployeeRoleType() { return employeeRoleType; }
+    public void setEmployeeRoleType(String employeeType) { this.employeeRoleType = employeeType; }
 
     public String getEmployeeType() { return employeeType; }
     public void setEmployeeType(String employeeType) { this.employeeType = employeeType; }

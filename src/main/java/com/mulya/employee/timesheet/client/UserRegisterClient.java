@@ -37,7 +37,7 @@ public class UserRegisterClient {
 
         List<UserDto> users = response.getBody();
         if (users == null || users.isEmpty()) {
-            throw new ResourceNotFoundException("User not found with ID: " + userId);
+            throw new ResourceNotFoundException("User not found with ID: " + userId, ResourceNotFoundException.ResourceType.USER);
         }
         setEmployeeTypeFromRole(users.get(0));
         return users.get(0);
@@ -56,7 +56,7 @@ public class UserRegisterClient {
 
         List<UserDto> users = response.getBody();
         if (users == null || users.isEmpty()) {
-            throw new ResourceNotFoundException("No users found with role: " + roleName);
+            throw new ResourceNotFoundException("No users found with role: " + roleName, ResourceNotFoundException.ResourceType.USER);
         }
         users.forEach(this::setEmployeeTypeFromRole);
         return users;
@@ -115,7 +115,7 @@ public class UserRegisterClient {
     public UserDto getUserNameByRole(String roleName) {
         List<UserDto> users = getUsersByRole(roleName);
         if (users.isEmpty()) {
-            throw new ResourceNotFoundException("No user found with role: " + roleName);
+            throw new ResourceNotFoundException("No user found with role: " + roleName, ResourceNotFoundException.ResourceType.USER);
         }
         return users.get(0); // Return the first user found with the specified role
     }
