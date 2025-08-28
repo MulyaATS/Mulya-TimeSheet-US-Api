@@ -13,6 +13,8 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -35,7 +37,6 @@ public class TimesheetController {
 
     @Autowired
     private TimesheetService timesheetService;
-
 
     @Autowired
     private UserRegisterClient userRegisterClient;
@@ -71,7 +72,7 @@ public class TimesheetController {
 
     @PostMapping("/approve")
     public ResponseEntity<ApiResponse<TimesheetApprovalDto>> approve(
-            @RequestParam Long timesheetId,
+            @RequestParam String timesheetId,
             @RequestParam String userId) {  // manager's own user ID
         Timesheet ts = timesheetService.approveTimesheet(timesheetId, userId);
 
@@ -82,7 +83,7 @@ public class TimesheetController {
 
     @PostMapping("/reject")
     public ResponseEntity<ApiResponse<TimesheetApprovalDto>> reject(
-            @RequestParam Long timesheetId,
+            @RequestParam String timesheetId,
             @RequestParam String userId,
             @RequestParam String reason) {
         Timesheet ts = timesheetService.rejectTimesheet(timesheetId, userId, reason);
@@ -91,6 +92,55 @@ public class TimesheetController {
 
         return ResponseEntity.ok(ApiResponse.success("Timesheet rejected", approvalDto));
     }
+
+    @GetMapping("/timesheets-pending")
+    public ResponseEntity<ApiResponse<List<TimesheetApprovalDto>>> getPendingTimesheets(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String managerUserId) {
+
+        Pageable pageable = PageRequest.of(page, size);
+
+        if (managerUserId == null) {
+            managerUserId = timesheetService.getDefaultManagerUserId();
+        }
+
+        var dtosPage = timesheetService.getTimesheetsByStatus("PENDING_APPROVAL", managerUserId, pageable);
+        return ResponseEntity.ok(ApiResponse.success("Pending timesheets retrieved", dtosPage.getContent()));
+    }
+
+    @GetMapping("/timesheets-approved")
+    public ResponseEntity<ApiResponse<List<TimesheetApprovalDto>>> getApprovedTimesheets(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String managerUserId) {
+
+        Pageable pageable = PageRequest.of(page, size);
+
+        if (managerUserId == null) {
+            managerUserId = timesheetService.getDefaultManagerUserId();
+        }
+
+        var dtosPage = timesheetService.getTimesheetsByStatus("APPROVED", managerUserId, pageable);
+        return ResponseEntity.ok(ApiResponse.success("Approved timesheets retrieved", dtosPage.getContent()));
+    }
+
+    @GetMapping("/timesheets-rejected")
+    public ResponseEntity<ApiResponse<List<TimesheetApprovalDto>>> getRejectedTimesheets(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String managerUserId) {
+
+        Pageable pageable = PageRequest.of(page, size);
+
+        if (managerUserId == null) {
+            managerUserId = timesheetService.getDefaultManagerUserId();
+        }
+
+        var dtosPage = timesheetService.getTimesheetsByStatus("REJECTED", managerUserId, pageable);
+        return ResponseEntity.ok(ApiResponse.success("Rejected timesheets retrieved", dtosPage.getContent()));
+    }
+
 
     @GetMapping("/getTimesheetsByUserId")
     public ResponseEntity<ApiResponse<List<TimesheetResponse>>> getUserTimesheets(@RequestParam String userId) {
@@ -104,12 +154,12 @@ public class TimesheetController {
         return ResponseEntity.ok(ApiResponse.success("All timesheets retrieved", responses));
     }
 
-    @PostMapping("/{id}/attachments")
+    @PostMapping("/{timesheetId}/attachments")
     public ResponseEntity<ApiResponse<List<AttachmentUploadResponse>>> uploadTimesheetAttachments(
-            @PathVariable Long id,
+            @PathVariable String timesheetId,
             @RequestParam("files") List<MultipartFile> files) throws IOException {
 
-        Timesheet ts = timesheetService.uploadAttachments(id, files);
+        Timesheet ts = timesheetService.uploadAttachments(timesheetId, files);
 
         // You probably have a User service — fetching employee name
         String employeeName = userRegisterClient.getUserInfos(ts.getUserId()).get(0).getUserName();
@@ -202,4 +252,20 @@ public class TimesheetController {
         TimesheetSummaryDto summaryDto = timesheetService.toSummaryDto(updated);
         return ResponseEntity.ok(ApiResponse.success("Weekly timesheet updated successfully", summaryDto));
     }
+
+    @GetMapping("/monthly-timesheets")
+    public ResponseEntity<ApiResponse<List<EmployeeMonthlyTimesheetDto>>> getAllEmployeeMonthlySummary(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthStart,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthEnd
+    ) throws Exception {
+
+        LocalDate normalizedStart = monthStart.withDayOfMonth(1);
+        LocalDate normalizedEnd = (monthEnd == null) ? normalizedStart.withDayOfMonth(normalizedStart.lengthOfMonth())
+                : monthEnd.withDayOfMonth(monthEnd.lengthOfMonth());
+
+        List<EmployeeMonthlyTimesheetDto> summaries = timesheetService.getAllEmployeesMonthlySummary(normalizedStart, normalizedEnd);
+
+        return ResponseEntity.ok(ApiResponse.success("Monthly timesheet summaries fetched", summaries));
+    }
+
 }

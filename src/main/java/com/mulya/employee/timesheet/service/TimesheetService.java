@@ -12,19 +12,20 @@ import com.mulya.employee.timesheet.model.Timesheet;
 import com.mulya.employee.timesheet.model.TimesheetType;
 import com.mulya.employee.timesheet.repository.AttachmentRepository;
 import com.mulya.employee.timesheet.repository.TimesheetRepository;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
 import java.time.*;
 import java.util.*;
 import java.util.stream.Collectors;
-
 @Service
 @RequiredArgsConstructor
 public class TimesheetService {
@@ -46,6 +47,11 @@ public class TimesheetService {
 
     @Autowired
     private AttachmentRepository attachmentRepository;
+
+    @Autowired
+    private LeaveService leaveService;
+
+    private static final Logger logger = LoggerFactory.getLogger(TimesheetService.class);
 
     @Transactional
     public Timesheet createTimesheet(String userId, TimesheetRequest req) {
@@ -211,8 +217,8 @@ public class TimesheetService {
     }
 
     @Transactional
-    public Timesheet approveTimesheet(Long id, String managerUserId) {
-        Timesheet ts = timesheetRepository.findById(id)
+    public Timesheet approveTimesheet(String id, String managerUserId) {
+        Timesheet ts = timesheetRepository.findByTimesheetId(id)
                 .orElseThrow(() -> new IllegalArgumentException("Timesheet not found"));
 
         ts.setStatus("APPROVED");
@@ -242,8 +248,8 @@ public class TimesheetService {
 
 
     @Transactional
-    public Timesheet rejectTimesheet(Long timesheetId, String managerUserId, String reason) {
-        Timesheet ts = timesheetRepository.findById(timesheetId)
+    public Timesheet rejectTimesheet(String timesheetId, String managerUserId, String reason) {
+        Timesheet ts = timesheetRepository.findByTimesheetId(timesheetId)
                 .orElseThrow(() -> new IllegalArgumentException("Timesheet not found"));
 
         ts.setStatus("REJECTED");
@@ -268,6 +274,24 @@ public class TimesheetService {
 
         return timesheetRepository.save(ts);
     }
+
+    public Page<TimesheetApprovalDto> getTimesheetsByStatus(String status, String managerUserId, Pageable pageable) {
+        Page<Timesheet> timesheetPage = timesheetRepository.findByStatus(status, pageable);
+        return timesheetPage.map(ts -> toApprovalDto(ts, managerUserId));
+    }
+
+    public String getDefaultManagerUserId() {
+        // Example: return the first user with "ACCOUNTS" role
+        return userRegisterClient.getUsersByRole("ACCOUNTS")
+                .stream()
+                .findFirst()
+                .map(UserDto::getUserId)
+                .orElse(null);
+    }
+
+
+
+
     public TimesheetSummaryDto toSummaryDto(Timesheet ts) {
         TimesheetSummaryDto dto = new TimesheetSummaryDto();
         dto.setTimesheetId(ts.getTimesheetId());
@@ -298,6 +322,7 @@ public class TimesheetService {
 
         dto.setWeekStartDate(ts.getWeekStartDate());
         dto.setWeekEndDate(ts.getWeekEndDate());
+        dto.setStatus(ts.getStatus());
 
         return dto;
     }
@@ -338,7 +363,7 @@ public class TimesheetService {
         resp.setTimesheetId(ts.getTimesheetId());
         resp.setUserId(ts.getUserId());
         resp.setEmployeeName(employeeName);
-        resp.setEmployeeType(ts.getEmployeeType());
+        resp.setEmployeeRoleType(ts.getEmployeeType());
         resp.setTimesheetType(ts.getTimesheetType());
         resp.setTimesheetDate(ts.getTimesheetDate());
         resp.setWeekStartDate(ts.getWeekStartDate());
@@ -397,6 +422,7 @@ public class TimesheetService {
                     PlacementDetailsDto placement = placements.get(0); // pick first or apply logic
                     resp.setStartDate(placement.getStartDate());
                     resp.setClientName(placement.getClientName());
+                    resp.setEmployeeType(placement.getEmployeeType());
                     System.out.println("Placement startDate: " + placement.getStartDate() + ", clientName: " + placement.getClientName());
                 } else {
                     System.out.println("No placements found for email: " + employeeEmail);
@@ -516,11 +542,9 @@ public class TimesheetService {
 
 
     @Transactional
-    public Timesheet uploadAttachments(Long timesheetId, List<MultipartFile> files) throws IOException {
-        Timesheet ts = timesheetRepository.findById(timesheetId)
-                .orElseThrow(() -> new IllegalArgumentException("Timesheet not found"));
-
-        // ✅ Check if attachments already exist for this week
+    public Timesheet uploadAttachments(String timesheetId, List<MultipartFile> files) throws IOException {
+        Timesheet ts = timesheetRepository.findByTimesheetId(timesheetId)
+                .orElseThrow(() -> new ResourceNotFoundException("Timesheet not found with ID: " + timesheetId, ResourceNotFoundException.ResourceType.TIMESHEET));
         boolean exists = !ts.getAttachments().isEmpty();
         if (exists) {
             throw new IllegalStateException(
@@ -551,6 +575,189 @@ public class TimesheetService {
         timesheetRepository.deleteById(id);
     }
 
+    public List<EmployeeMonthlyTimesheetDto> getAllEmployeesMonthlySummary(LocalDate monthStart, LocalDate monthEnd) throws Exception {
+        logger.info("Fetching timesheets from {} to {}", monthStart, monthEnd);
+
+        // Extend query period to earliest Monday before monthStart for partial weeks
+        LocalDate firstMonday = monthStart;
+        while (firstMonday.getDayOfWeek() != DayOfWeek.MONDAY) {
+            firstMonday = firstMonday.minusDays(1);
+        }
+
+        List<Timesheet> timesheets = timesheetRepository.findByWeekStartDateBetween(firstMonday, monthEnd);
+
+        Map<String, List<Timesheet>> byUser = timesheets.stream()
+                .collect(Collectors.groupingBy(Timesheet::getUserId));
+
+        List<Week> calendarWeeks = getWeeksMondayToFridayForMonth(monthStart, monthEnd);
+
+        // Status priority map defines aggregation order: lower is higher priority
+        Map<String, Integer> statusPriority = Map.of(
+                "DRAFT", 1,
+                "PENDING_APPROVAL", 2,
+                "REJECTED", 3,
+                "APPROVED", 4
+        );
+
+        List<EmployeeMonthlyTimesheetDto> summaries = new ArrayList<>();
+
+        for (Map.Entry<String, List<Timesheet>> entry : byUser.entrySet()) {
+            String userId = entry.getKey();
+            List<Timesheet> empTimesheets = entry.getValue();
+
+            double[] weeklyWorkHours = new double[calendarWeeks.size()];
+            double[] weeklyLeaveHours = new double[calendarWeeks.size()];
+            String[] weeklyStatuses = new String[calendarWeeks.size()];
+            Arrays.fill(weeklyStatuses, "NO_TIMESHEET");
+
+            for (Timesheet ts : empTimesheets) {
+                LocalDate tsDate = ts.getWeekStartDate();
+
+                int weekIndex = -1;
+                for (int i = 0; i < calendarWeeks.size(); i++) {
+                    Week w = calendarWeeks.get(i);
+                    if (!tsDate.isBefore(w.weekStart) && !tsDate.isAfter(w.weekEnd)) {
+                        weekIndex = i;
+                        break;
+                    }
+                }
+
+                if (weekIndex == -1) {
+                    logger.warn("Timesheet weekStartDate {} not in any week", tsDate);
+                    continue;
+                }
+
+                Week currentWeek = calendarWeeks.get(weekIndex);
+
+                List<TimesheetEntry> workingEntries = mapper.readValue(ts.getWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
+                List<TimesheetEntry> nonWorkingEntries = mapper.readValue(ts.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
+
+                double workHours = workingEntries.stream()
+                        .filter(e -> currentWeek.daysInsideMonth.contains(LocalDate.parse(e.getDate().toString())))
+                        .mapToDouble(TimesheetEntry::getHours)
+                        .sum();
+                double leaveHours = nonWorkingEntries.stream()
+                        .filter(e -> currentWeek.daysInsideMonth.contains(LocalDate.parse(e.getDate().toString())))
+                        .mapToDouble(TimesheetEntry::getHours)
+                        .sum();
+
+                weeklyWorkHours[weekIndex] += workHours;
+                weeklyLeaveHours[weekIndex] += leaveHours;
+
+                String tsStatus = ts.getStatus() != null ? ts.getStatus() : "NO_TIMESHEET";
+                if (weeklyStatuses[weekIndex].equals("NO_TIMESHEET") ||
+                        statusPriority.getOrDefault(tsStatus, Integer.MAX_VALUE) < statusPriority.getOrDefault(weeklyStatuses[weekIndex], Integer.MAX_VALUE)) {
+                    weeklyStatuses[weekIndex] = tsStatus;
+                }
+            }
+
+            String aggregatedStatus = Arrays.stream(weeklyStatuses)
+                    .filter(statusPriority::containsKey)
+                    .min(Comparator.comparingInt(statusPriority::get))
+                    .orElse("NO_TIMESHEET");
+
+            // Fetch user info and placements as usual
+            List<UserInfoDto> userInfoList = userRegisterClient.getUserInfos(userId);
+            String employeeName = userInfoList.isEmpty() ? "Unknown" : userInfoList.get(0).getUserName();
+            String employeeEmail = userRegisterClient.getUserEmail(userId);
+
+            String employeeType = "Unknown";
+            LocalDate joiningDate = null;
+            String clientName = null;
+
+            try {
+                if (employeeEmail != null && !employeeEmail.isBlank()) {
+                    List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(employeeEmail);
+                    if (placements != null && !placements.isEmpty()) {
+                        PlacementDetailsDto placement = placements.get(0);
+                        employeeType = placement.getEmployeeType();
+                        joiningDate = placement.getStartDate();
+                        clientName = placement.getClientName();
+                    }
+                }
+            } catch (ResourceNotFoundException ex) {
+                logger.warn("No placement details found for email {}: {}", employeeEmail, ex.getMessage());
+            }
+
+            double totalWorkingHours = Arrays.stream(weeklyWorkHours).sum();
+            double totalLeaveHours = Arrays.stream(weeklyLeaveHours).sum();
+
+            // *** UPDATED LEAVE CALCULATION - SINGLE METHOD CALL ***
+            LeaveService.LeaveCalculationResult leaveResult = leaveService.calculateAndSaveCurrentLeaves(
+                    userId, employeeName, employeeType, joiningDate,
+                    monthStart, monthEnd, totalLeaveHours, employeeName
+            );
+
+            // Use the result values
+            int availableLeaves = leaveResult.availableLeaves;
+            int takenLeaves = leaveResult.takenLeaves;
+            int leaveBalance = leaveResult.leaveBalance;
+
+            // Adjust working hours for unpaid leave or add back paid leave hours
+            if (leaveResult.unpaidLeaveDays > 0) {
+                double hoursToDeduct = leaveResult.unpaidLeaveDays * 8.0;
+                totalWorkingHours -= hoursToDeduct;
+                logger.debug("UserId {} - Unpaid leave days: {}, hours deducted: {}", userId, leaveResult.unpaidLeaveDays, hoursToDeduct);
+            } else if ("Full-time".equalsIgnoreCase(employeeType)) {
+                // All leaves are paid - add to working hours
+                totalWorkingHours += totalLeaveHours;
+                for (int i = 0; i < weeklyWorkHours.length; i++) {
+                    weeklyWorkHours[i] += weeklyLeaveHours[i];
+                }
+            }
+            // For non-full-time employees, totalWorkingHours already excludes leave hours naturally
+
+            EmployeeMonthlyTimesheetDto dto = new EmployeeMonthlyTimesheetDto();
+            dto.setEmployeeId(userId);
+            dto.setEmployeeName(employeeName);
+            dto.setEmployeeType(employeeType);
+            dto.setClientName(clientName);
+            dto.setMonthStartDate(monthStart);
+            dto.setMonthEndDate(monthEnd);
+            dto.setJoiningDate(joiningDate);
+            dto.setStatus(aggregatedStatus);
+
+            dto.setWeek1Hours(calendarWeeks.size() > 0 ? (int) Math.round(weeklyWorkHours[0]) : 0);
+            dto.setWeek2Hours(calendarWeeks.size() > 1 ? (int) Math.round(weeklyWorkHours[1]) : 0);
+            dto.setWeek3Hours(calendarWeeks.size() > 2 ? (int) Math.round(weeklyWorkHours[2]) : 0);
+            dto.setWeek4Hours(calendarWeeks.size() > 3 ? (int) Math.round(weeklyWorkHours[3]) : 0);
+            dto.setWeek5Hours(calendarWeeks.size() > 4 ? (int) Math.round(weeklyWorkHours[4]) : 0);
+
+            dto.setTotalWorkingHours((int) Math.round(totalWorkingHours));
+            dto.setTotalWorkingDays((int) Math.round(totalWorkingHours / 8.0));
+
+            // Set all three leave values from result
+            dto.setAvailableLeaves(availableLeaves);
+            dto.setTakenLeaves(takenLeaves);
+            dto.setLeaveBalance(leaveBalance);
+
+            summaries.add(dto);
+        }
+
+        logger.info("Completed processing monthly summaries for {} employees", summaries.size());
+        return summaries;
+    }
+
+    private List<Week> getWeeksMondayToFridayForMonth(LocalDate monthStart, LocalDate monthEnd) {
+        List<Week> weeks = new ArrayList<>();
+        LocalDate firstMonday = monthStart;
+        while (firstMonday.getDayOfWeek() != DayOfWeek.MONDAY) {
+            firstMonday = firstMonday.minusDays(1);
+        }
+        LocalDate currentStart = firstMonday;
+        while (!currentStart.isAfter(monthEnd)) {
+            LocalDate currentEnd = currentStart.plusDays(4); // Monday to Friday
+            List<LocalDate> daysInsideMonth = new ArrayList<>();
+            for (LocalDate d = currentStart; !d.isAfter(currentEnd); d = d.plusDays(1)) {
+                if (!d.isBefore(monthStart) && !d.isAfter(monthEnd)) {
+                    daysInsideMonth.add(d);
+                }
+            }
+            weeks.add(new Week(currentStart, currentEnd, daysInsideMonth));
+            currentStart = currentStart.plusWeeks(1);
+        }
+        return weeks;
+    }
 
 }
 

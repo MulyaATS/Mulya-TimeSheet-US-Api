@@ -1,6 +1,8 @@
 package com.mulya.employee.timesheet.repository;
 
 import com.mulya.employee.timesheet.model.Timesheet;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
@@ -15,4 +17,10 @@ public interface TimesheetRepository  extends JpaRepository<Timesheet, Long> {
 
     @Query(value = "SELECT timesheet_id FROM timesheets ORDER BY timesheet_id DESC LIMIT 1", nativeQuery = true)
     String findMaxTimesheetId();
+
+    Optional<Timesheet> findByTimesheetId(String timesheetId);
+
+    Page<Timesheet> findByStatus(String status, Pageable pageable);
+
+    List<Timesheet> findByWeekStartDateBetween(LocalDate startDate, LocalDate endDate);
 }

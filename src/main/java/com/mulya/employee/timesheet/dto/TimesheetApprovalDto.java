@@ -4,12 +4,20 @@ import java.time.LocalDate;
 
 public class TimesheetApprovalDto {
     private String timesheetId;
-    private String userId;          // Employee userId
+    private String userId;
     private String employeeName;
-    private String approveId;       // Manager userId
-    private String approvedBy;      // Manager name
+    private String approveId;
+    private String approvedBy;
     private LocalDate weekStartDate;
     private LocalDate weekEndDate;
+    private String status;
+
+    public String getStatus() {
+        return status;
+    }
+    public void setStatus(String status) {
+        this.status = status;
+    }
 
     public String getTimesheetId() {
         return timesheetId;
@@ -65,6 +73,4 @@ public class TimesheetApprovalDto {
     public void setWeekEndDate(LocalDate weekEndDate) {
         this.weekEndDate = weekEndDate;
     }
-
-    // Getters and setters
 }

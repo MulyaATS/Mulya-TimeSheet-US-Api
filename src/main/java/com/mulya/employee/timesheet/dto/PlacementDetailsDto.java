@@ -1,6 +1,7 @@
 package com.mulya.employee.timesheet.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.LocalDate;
 
@@ -8,8 +9,10 @@ import java.time.LocalDate;
 public class PlacementDetailsDto {
     private LocalDate startDate;
     private String clientName;
+    @JsonProperty("employmentType")
+    private String employeeType;
 
-    // Getters and Setters
+    // Getters and setters
     public LocalDate getStartDate() {
         return startDate;
     }
@@ -22,5 +25,13 @@ public class PlacementDetailsDto {
     }
     public void setClientName(String clientName) {
         this.clientName = clientName;
+    }
+
+    public String getEmployeeType() {        // getter for employeeType
+        return employeeType;
+    }
+
+    public void setEmployeeType(String employeeType) {   // setter for employeeType
+        this.employeeType = employeeType;
     }
 }

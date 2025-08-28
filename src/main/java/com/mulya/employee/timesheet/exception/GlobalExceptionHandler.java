@@ -90,13 +90,36 @@ public class GlobalExceptionHandler{
 
     // ====== Handle Attachment Not Found ======
     @ExceptionHandler(ResourceNotFoundException.class)
-    public ResponseEntity<ApiResponse<?>> handleAttachmentNotFound(ResourceNotFoundException ex) {
-        logger.error("Attachment not found: {}", ex.getMessage());
+    public ResponseEntity<ApiResponse<?>> handleResourceNotFound(ResourceNotFoundException ex) {
+        String userMessage;
+        switch (ex.getResourceType()) {
+            case TIMESHEET:
+                userMessage = "Timesheet Not Found";
+                break;
+            case PLACEMENT:
+                userMessage = "Placement Not Found";
+                break;
+            case ATTACHMENT:
+                userMessage = "Attachment Not Found";
+                break;
+            case USER:
+                userMessage = "User Not Found";
+                break;
+            case EMPLOYEE:
+                userMessage = "Employee Not Found";
+                break;
+            default:
+                userMessage = "Resource Not Found";
+        }
+
+        logger.error("{}: {}", userMessage, ex.getMessage());
+
         ApiResponse<?> errorResponse = ApiResponse.error(
-                "Attachment Not Found",
+                userMessage,
                 String.valueOf(HttpStatus.NOT_FOUND.value()),
                 ex.getMessage()
         );
+
         return new ResponseEntity<>(errorResponse, HttpStatus.NOT_FOUND);
     }
 
