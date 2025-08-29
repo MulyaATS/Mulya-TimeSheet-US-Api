@@ -1,4 +1,5 @@
 package com.mulya.employee.timesheet.dto;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 public class EmployeeLeaveSummaryDto {
@@ -16,6 +17,22 @@ public class EmployeeLeaveSummaryDto {
     private String updatedBy;
 
     private LocalDateTime updatedAt = LocalDateTime.now();
+
+    private String employeeType;   // Added for initialization
+    private LocalDate joiningDate;
+
+    public LocalDate getJoiningDate() {
+        return joiningDate;
+    }
+    public void setJoiningDate(LocalDate joiningDate) {
+        this.joiningDate = joiningDate;
+    }
+    public String getEmployeeType() {
+        return employeeType;
+    }
+    public void setEmployeeType(String employeeType) {
+        this.employeeType = employeeType;
+    }
 
 
     public String getUserId() {

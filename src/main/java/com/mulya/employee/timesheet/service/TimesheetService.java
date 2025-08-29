@@ -8,9 +8,11 @@ import com.mulya.employee.timesheet.dto.*;
 import com.mulya.employee.timesheet.exception.ResourceNotFoundException;
 import com.mulya.employee.timesheet.exception.ValidationException;
 import com.mulya.employee.timesheet.model.Attachment;
+import com.mulya.employee.timesheet.model.EmployeeLeaveSummary;
 import com.mulya.employee.timesheet.model.Timesheet;
 import com.mulya.employee.timesheet.model.TimesheetType;
 import com.mulya.employee.timesheet.repository.AttachmentRepository;
+import com.mulya.employee.timesheet.repository.EmployeeLeaveSummaryRepository;
 import com.mulya.employee.timesheet.repository.TimesheetRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -21,7 +23,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-
 import java.io.IOException;
 import java.time.*;
 import java.util.*;
@@ -51,6 +52,9 @@ public class TimesheetService {
     @Autowired
     private LeaveService leaveService;
 
+    @Autowired
+    private EmployeeLeaveSummaryRepository employeeLeaveSummaryRepository;
+
     private static final Logger logger = LoggerFactory.getLogger(TimesheetService.class);
 
     @Transactional
@@ -61,7 +65,6 @@ public class TimesheetService {
             errors.put("userId", "User not found: " + userId);
             throw new ValidationException(errors);
         }
-
         String employeeType = (req.getType() == TimesheetType.DAILY) ? "INTERNAL" : "EXTERNAL";
 
         if ("INTERNAL".equalsIgnoreCase(employeeType) && req.getType() != TimesheetType.DAILY) {
@@ -111,7 +114,8 @@ public class TimesheetService {
             currentWorkingHours = mapper.readValue(ts.getWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
         } catch (Exception e) {
             currentWorkingHours = new ArrayList<>();
-        }try {
+        }
+        try {
             currentNonWorkingHours = mapper.readValue(ts.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
         } catch (Exception e) {
             currentNonWorkingHours = new ArrayList<>();
@@ -119,7 +123,7 @@ public class TimesheetService {
         List<TimesheetEntry> newWorkingEntries = req.getWorkingEntries();
         List<TimesheetEntry> newNonWorkingEntries = req.getNonWorkingEntries();
 
-        // Check for duplicate dates
+        // Check for duplicate dates in working entries
         Set<LocalDate> existingWorkingDates = currentWorkingHours.stream()
                 .map(TimesheetEntry::getDate)
                 .collect(Collectors.toSet());
@@ -144,8 +148,35 @@ public class TimesheetService {
         double totalWorkingHours = currentWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
         ts.setPercentageOfTarget((totalWorkingHours / 40.0) * 100);
 
+        // --- New logic to update leaves taken ---
+        // Sum total leave hours added (non-working hours)
+        double totalLeaveHoursAdded = newNonWorkingEntries.stream()
+                .mapToDouble(TimesheetEntry::getHours)
+                .sum();
+
+        int leaveDaysTaken = (int) Math.ceil(totalLeaveHoursAdded / 8.0);
+
+        if (leaveDaysTaken > 0) {
+            try {
+                String employeeName = null;
+                List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(userId);
+                if (userInfos != null && !userInfos.isEmpty()) {
+                    employeeName = userInfos.get(0).getUserName();
+                }
+                if (employeeName == null || employeeName.isBlank()) {
+                    employeeName = "";
+                }
+                leaveService.updateLeaveOnLeaveTaken(userId, leaveDaysTaken,employeeName );
+                logger.info("Updated leave taken for userId {} by {} days", userId, leaveDaysTaken);
+            } catch (Exception e) {
+                logger.error("Failed to update leave taken for userId {}: {}", userId, e.getMessage(), e);
+                // Optionally handle or rethrow exception
+            }
+        }
+
         return timesheetRepository.save(ts);
     }
+
 
     public String generateNextTimesheetId() {
         // Query the max existing timesheetId from DB
@@ -591,13 +622,19 @@ public class TimesheetService {
 
         List<Week> calendarWeeks = getWeeksMondayToFridayForMonth(monthStart, monthEnd);
 
-        // Status priority map defines aggregation order: lower is higher priority
         Map<String, Integer> statusPriority = Map.of(
                 "DRAFT", 1,
                 "PENDING_APPROVAL", 2,
                 "REJECTED", 3,
                 "APPROVED", 4
         );
+
+        Set<String> userIds = byUser.keySet();
+
+        // Bulk fetch leave summaries for all users
+        Map<String, EmployeeLeaveSummary> leaveSummariesMap = employeeLeaveSummaryRepository.findByUserIdIn(userIds)
+                .stream()
+                .collect(Collectors.toMap(EmployeeLeaveSummary::getUserId, ls -> ls));
 
         List<EmployeeMonthlyTimesheetDto> summaries = new ArrayList<>();
 
@@ -636,6 +673,7 @@ public class TimesheetService {
                         .filter(e -> currentWeek.daysInsideMonth.contains(LocalDate.parse(e.getDate().toString())))
                         .mapToDouble(TimesheetEntry::getHours)
                         .sum();
+
                 double leaveHours = nonWorkingEntries.stream()
                         .filter(e -> currentWeek.daysInsideMonth.contains(LocalDate.parse(e.getDate().toString())))
                         .mapToDouble(TimesheetEntry::getHours)
@@ -656,7 +694,6 @@ public class TimesheetService {
                     .min(Comparator.comparingInt(statusPriority::get))
                     .orElse("NO_TIMESHEET");
 
-            // Fetch user info and placements as usual
             List<UserInfoDto> userInfoList = userRegisterClient.getUserInfos(userId);
             String employeeName = userInfoList.isEmpty() ? "Unknown" : userInfoList.get(0).getUserName();
             String employeeEmail = userRegisterClient.getUserEmail(userId);
@@ -664,7 +701,6 @@ public class TimesheetService {
             String employeeType = "Unknown";
             LocalDate joiningDate = null;
             String clientName = null;
-
             try {
                 if (employeeEmail != null && !employeeEmail.isBlank()) {
                     List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(employeeEmail);
@@ -682,30 +718,20 @@ public class TimesheetService {
             double totalWorkingHours = Arrays.stream(weeklyWorkHours).sum();
             double totalLeaveHours = Arrays.stream(weeklyLeaveHours).sum();
 
-            // *** UPDATED LEAVE CALCULATION - SINGLE METHOD CALL ***
-            LeaveService.LeaveCalculationResult leaveResult = leaveService.calculateAndSaveCurrentLeaves(
-                    userId, employeeName, employeeType, joiningDate,
-                    monthStart, monthEnd, totalLeaveHours, employeeName
-            );
+            // Use leave summary from DB - no saving, no recalculation
+            EmployeeLeaveSummary leaveSummary = leaveSummariesMap.get(userId);
 
-            // Use the result values
-            int availableLeaves = leaveResult.availableLeaves;
-            int takenLeaves = leaveResult.takenLeaves;
-            int leaveBalance = leaveResult.leaveBalance;
+            int availableLeaves = leaveSummary != null ? leaveSummary.getAvailableLeaves() : 0;
+            int takenLeaves = leaveSummary != null ? leaveSummary.getTakenLeaves() : 0;
+            int leaveBalance = leaveSummary != null ? leaveSummary.getLeaveBalance() : 0;
 
-            // Adjust working hours for unpaid leave or add back paid leave hours
-            if (leaveResult.unpaidLeaveDays > 0) {
-                double hoursToDeduct = leaveResult.unpaidLeaveDays * 8.0;
-                totalWorkingHours -= hoursToDeduct;
-                logger.debug("UserId {} - Unpaid leave days: {}, hours deducted: {}", userId, leaveResult.unpaidLeaveDays, hoursToDeduct);
-            } else if ("Full-time".equalsIgnoreCase(employeeType)) {
-                // All leaves are paid - add to working hours
+            // Adjust working hours for full-time paid leave hours included
+            if (availableLeaves >= 0 && "Full-time".equalsIgnoreCase(employeeType)) {
                 totalWorkingHours += totalLeaveHours;
                 for (int i = 0; i < weeklyWorkHours.length; i++) {
                     weeklyWorkHours[i] += weeklyLeaveHours[i];
                 }
             }
-            // For non-full-time employees, totalWorkingHours already excludes leave hours naturally
 
             EmployeeMonthlyTimesheetDto dto = new EmployeeMonthlyTimesheetDto();
             dto.setEmployeeId(userId);
@@ -726,7 +752,6 @@ public class TimesheetService {
             dto.setTotalWorkingHours((int) Math.round(totalWorkingHours));
             dto.setTotalWorkingDays((int) Math.round(totalWorkingHours / 8.0));
 
-            // Set all three leave values from result
             dto.setAvailableLeaves(availableLeaves);
             dto.setTakenLeaves(takenLeaves);
             dto.setLeaveBalance(leaveBalance);
