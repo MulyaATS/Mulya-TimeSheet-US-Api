@@ -65,7 +65,6 @@ public class TimesheetService {
             errors.put("userId", "User not found: " + userId);
             throw new ValidationException(errors);
         }
-
         String employeeType = (req.getType() == TimesheetType.DAILY) ? "INTERNAL" : "EXTERNAL";
 
         if ("INTERNAL".equalsIgnoreCase(employeeType) && req.getType() != TimesheetType.DAILY) {
@@ -115,7 +114,8 @@ public class TimesheetService {
             currentWorkingHours = mapper.readValue(ts.getWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
         } catch (Exception e) {
             currentWorkingHours = new ArrayList<>();
-        }try {
+        }
+        try {
             currentNonWorkingHours = mapper.readValue(ts.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
         } catch (Exception e) {
             currentNonWorkingHours = new ArrayList<>();
@@ -123,7 +123,7 @@ public class TimesheetService {
         List<TimesheetEntry> newWorkingEntries = req.getWorkingEntries();
         List<TimesheetEntry> newNonWorkingEntries = req.getNonWorkingEntries();
 
-        // Check for duplicate dates
+        // Check for duplicate dates in working entries
         Set<LocalDate> existingWorkingDates = currentWorkingHours.stream()
                 .map(TimesheetEntry::getDate)
                 .collect(Collectors.toSet());
@@ -148,8 +148,35 @@ public class TimesheetService {
         double totalWorkingHours = currentWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
         ts.setPercentageOfTarget((totalWorkingHours / 40.0) * 100);
 
+        // --- New logic to update leaves taken ---
+        // Sum total leave hours added (non-working hours)
+        double totalLeaveHoursAdded = newNonWorkingEntries.stream()
+                .mapToDouble(TimesheetEntry::getHours)
+                .sum();
+
+        int leaveDaysTaken = (int) Math.ceil(totalLeaveHoursAdded / 8.0);
+
+        if (leaveDaysTaken > 0) {
+            try {
+                String employeeName = null;
+                List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(userId);
+                if (userInfos != null && !userInfos.isEmpty()) {
+                    employeeName = userInfos.get(0).getUserName();
+                }
+                if (employeeName == null || employeeName.isBlank()) {
+                    employeeName = "";
+                }
+                leaveService.updateLeaveOnLeaveTaken(userId, leaveDaysTaken,employeeName );
+                logger.info("Updated leave taken for userId {} by {} days", userId, leaveDaysTaken);
+            } catch (Exception e) {
+                logger.error("Failed to update leave taken for userId {}: {}", userId, e.getMessage(), e);
+                // Optionally handle or rethrow exception
+            }
+        }
+
         return timesheetRepository.save(ts);
     }
+
 
     public String generateNextTimesheetId() {
         // Query the max existing timesheetId from DB
