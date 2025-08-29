@@ -8,6 +8,7 @@ import com.mulya.employee.timesheet.model.Attachment;
 import com.mulya.employee.timesheet.model.Timesheet;
 import com.mulya.employee.timesheet.model.TimesheetType;
 import com.mulya.employee.timesheet.repository.AttachmentRepository;
+import com.mulya.employee.timesheet.service.LeaveService;
 import com.mulya.employee.timesheet.service.TimesheetService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -17,6 +18,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -43,6 +45,9 @@ public class TimesheetController {
 
     @Autowired
     private AttachmentRepository attachmentRepository;
+
+    @Autowired
+    private LeaveService leaveService;
 
     @PostMapping("/daily-entry")
     public ResponseEntity<ApiResponse<TimesheetSummaryDto>> saveDailyEntry(
@@ -268,4 +273,28 @@ public class TimesheetController {
         return ResponseEntity.ok(ApiResponse.success("Monthly timesheet summaries fetched", summaries));
     }
 
+    @PostMapping("/leave-initialization")
+    public ResponseEntity<ApiResponse<EmployeeLeaveSummaryDto>> initializeLeave(@RequestBody EmployeeLeaveSummaryDto dto) {
+        try {
+            EmployeeLeaveSummaryDto savedDto = leaveService.initializeLeaveSummaryForNewEmployee(dto);
+            return ResponseEntity.ok(ApiResponse.success("Leave initialized successfully", savedDto));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponse.error("Leave initialization failed", "INIT_ERROR", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/{userId}/update-leave-taken")
+    public ResponseEntity<ApiResponse<EmployeeLeaveSummaryDto>> updateLeaveTaken(
+            @PathVariable String userId,
+            @RequestBody LeaveTakenUpdateRequest request) {
+        try {
+            EmployeeLeaveSummaryDto updatedSummary = leaveService.updateLeaveOnLeaveTaken(
+                    userId, request.getLeavesTakenNow(), request.getUpdatedBy());
+            return ResponseEntity.ok(ApiResponse.success("Leave updated successfully", updatedSummary));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponse.error("Failed to update leave", "UPDATE_ERROR", e.getMessage()));
+        }
+    }
 }

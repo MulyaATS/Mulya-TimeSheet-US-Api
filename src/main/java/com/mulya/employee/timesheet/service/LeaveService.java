@@ -155,21 +155,79 @@ public class LeaveService {
     }
 
     @Transactional
-    public void updateLeaveSummary(String userId, String employeeName,
-                                   int availableLeaves, int takenLeaves,
-                                   int leaveBalance, String updatedBy) {
+    public EmployeeLeaveSummaryDto initializeLeaveSummaryForNewEmployee(EmployeeLeaveSummaryDto dto) {
+        String userId = dto.getUserId();
+        String employeeName = dto.getEmployeeName();
+        String employeeType = dto.getEmployeeType();
+        LocalDate joiningDate = dto.getJoiningDate();
+        String updatedBy = dto.getUpdatedBy();
+
+        if (userId == null || joiningDate == null) return null;
+
+        final int finalAvailableLeaves;
+        if ("Full-time".equalsIgnoreCase(employeeType)) {
+            int monthsRemaining = 12 - joiningDate.getMonthValue() + 1;
+            finalAvailableLeaves = monthsRemaining; // 1 leave per month
+        } else {
+            finalAvailableLeaves = -1; // For other types like C2C
+        }
+
+        Optional<EmployeeLeaveSummary> optionalSummary = employeeLeaveSummaryRepository.findByUserId(userId);
+
+        EmployeeLeaveSummary savedSummary;
+        if (optionalSummary.isPresent()) {
+            savedSummary = optionalSummary.get();
+        } else {
+            EmployeeLeaveSummary summary = new EmployeeLeaveSummary();
+            summary.setUserId(userId);
+            summary.setEmployeeName(employeeName);
+            summary.setAvailableLeaves(finalAvailableLeaves);
+            summary.setTakenLeaves(0);
+            summary.setLeaveBalance(finalAvailableLeaves >= 0 ? finalAvailableLeaves : 0);
+            summary.setUpdatedBy(updatedBy);
+            summary.setUpdatedAt(LocalDateTime.now());
+            savedSummary = employeeLeaveSummaryRepository.save(summary);
+        }
+
+        return convertToDto(savedSummary);
+    }
+
+    @Transactional
+    public EmployeeLeaveSummaryDto updateLeaveOnLeaveTaken(String userId, int leavesTakenNow, String updatedBy) {
         EmployeeLeaveSummary summary = employeeLeaveSummaryRepository.findByUserId(userId)
-                .orElse(new EmployeeLeaveSummary());
-        summary.setUserId(userId);
-        summary.setEmployeeName(employeeName);
-        summary.setAvailableLeaves(availableLeaves);
-        summary.setTakenLeaves(takenLeaves);
-        summary.setLeaveBalance(leaveBalance);
+                .orElseThrow(() -> new RuntimeException("Leave summary not found for user: " + userId));
+
+        // Update taken leaves cumulatively
+        int newTakenLeaves = summary.getTakenLeaves() + leavesTakenNow;
+
+        if (summary.getAvailableLeaves() < 0) {
+            // For non-paid leaves (e.g. C2C), set availableLeaves = -1 persistently
+            // Only update takenLeaves, leave availableLeaves unchanged
+            summary.setTakenLeaves(newTakenLeaves);
+            // Optionally, update leaveBalance if needed, or keep zero
+            summary.setLeaveBalance(0);
+        } else {
+            // For paid leaves (Full-time)
+            // Subtract newly taken leaves from current availableLeaves
+            int newAvailableLeaves = summary.getAvailableLeaves() - leavesTakenNow;
+            if (newAvailableLeaves < 0) newAvailableLeaves = 0;
+
+            // leaveBalance = new availableLeaves - total taken leaves; bound to zero
+            int newLeaveBalance = newAvailableLeaves - newTakenLeaves;
+            if (newLeaveBalance < 0) newLeaveBalance = 0;
+
+            summary.setAvailableLeaves(newAvailableLeaves);
+            summary.setTakenLeaves(newTakenLeaves);
+            summary.setLeaveBalance(newLeaveBalance);
+        }
+
         summary.setUpdatedBy(updatedBy);
         summary.setUpdatedAt(LocalDateTime.now());
 
-        employeeLeaveSummaryRepository.save(summary);
+        EmployeeLeaveSummary saved = employeeLeaveSummaryRepository.save(summary);
+        return convertToDto(saved);
     }
+
 
     private EmployeeLeaveSummaryDto convertToDto(EmployeeLeaveSummary entity) {
         EmployeeLeaveSummaryDto dto = new EmployeeLeaveSummaryDto();
