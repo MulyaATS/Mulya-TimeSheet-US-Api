@@ -24,9 +24,13 @@ public class EmailService {
             helper.setText(htmlBody, true);
             mailSender.send(message);
         } catch (Exception e) {
+            // ✅ Print the actual cause to logs before rethrowing
+            System.err.println("Email send failure: " + e.getMessage());
+            e.printStackTrace();  // ✅ Full stack trace in logs
             throw new RuntimeException("Failed to send email to " + to, e);
         }
     }
+
 
     // Manager Notification (classic card layout)
     public void sendManagerApprovalRequestEmail(Timesheet ts, String managerEmail, String managerName, String employeeName) {
