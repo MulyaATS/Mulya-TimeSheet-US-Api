@@ -248,7 +248,7 @@ public class TimesheetController {
         if (request.getType() != TimesheetType.WEEKLY) {
             return ResponseEntity.badRequest().body(ApiResponse.error(
                     "Invalid timesheet type for this endpoint",
-                    "400",
+                    String.valueOf(HttpStatus.BAD_REQUEST.value()),
                     "Only WEEKLY timesheets can be updated via this method"
             ));
         }
@@ -280,7 +280,7 @@ public class TimesheetController {
             return ResponseEntity.ok(ApiResponse.success("Leave initialized successfully", savedDto));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("Leave initialization failed", "INIT_ERROR", e.getMessage()));
+                    .body(ApiResponse.error("Leave initialization failed", String.valueOf(HttpStatus.INTERNAL_SERVER_ERROR.value()), e.getMessage()));
         }
     }
 
@@ -294,7 +294,18 @@ public class TimesheetController {
             return ResponseEntity.ok(ApiResponse.success("Leave updated successfully", updatedSummary));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("Failed to update leave", "UPDATE_ERROR", e.getMessage()));
+                    .body(ApiResponse.error("Failed to update leave", String.valueOf(HttpStatus.INTERNAL_SERVER_ERROR.value()), e.getMessage()));
+        }
+    }
+
+    @GetMapping("/vendors/{userId}")
+    public ResponseEntity<ApiResponse<List<String>>> getVendorsForUser(@PathVariable String userId) {
+        try {
+            List<String> vendorNames = timesheetService.getVendorNamesByUserId(userId);
+            return ResponseEntity.ok(ApiResponse.success("Vendor names fetched successfully", vendorNames));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponse.error("Failed to fetch vendor names", String.valueOf(HttpStatus.INTERNAL_SERVER_ERROR.value()), e.getMessage()));
         }
     }
 }

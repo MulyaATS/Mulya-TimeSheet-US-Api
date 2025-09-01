@@ -3,7 +3,7 @@ package com.mulya.employee.timesheet.exception;
 public class ResourceNotFoundException extends RuntimeException {
 
     public enum ResourceType {
-        TIMESHEET, PLACEMENT, ATTACHMENT, USER, EMPLOYEE
+        TIMESHEET, PLACEMENT, ATTACHMENT, USER, EMPLOYEE, CANDIDATE
     }
 
     private final ResourceType resourceType;
