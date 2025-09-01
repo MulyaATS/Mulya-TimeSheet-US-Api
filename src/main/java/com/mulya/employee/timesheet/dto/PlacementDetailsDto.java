@@ -11,8 +11,8 @@ public class PlacementDetailsDto {
     private String clientName;
     @JsonProperty("employmentType")
     private String employeeType;
+    private String VendorName;
 
-    // Getters and setters
     public LocalDate getStartDate() {
         return startDate;
     }
@@ -34,4 +34,10 @@ public class PlacementDetailsDto {
     public void setEmployeeType(String employeeType) {   // setter for employeeType
         this.employeeType = employeeType;
     }
+
+    public String getVendorName() {
+        return VendorName;
+    }
+    public void setVendorName(String vendorName) {
+        VendorName = vendorName;}
 }

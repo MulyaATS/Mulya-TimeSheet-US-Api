@@ -10,6 +10,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.Collections;
@@ -24,6 +25,9 @@ public class UserRegisterClient {
     @Autowired
     private RestTemplate restTemplate;
 
+    /**
+     * Fetch user by userId; throws ResourceNotFoundException if not found.
+     */
     public UserDto getUserById(String userId) {
         String url = UriComponentsBuilder
                 .fromHttpUrl(userServiceBaseUrl + "/employee")
@@ -32,8 +36,7 @@ public class UserRegisterClient {
 
         ResponseEntity<List<UserDto>> response = restTemplate.exchange(
                 url, HttpMethod.GET, null,
-                new ParameterizedTypeReference<List<UserDto>>() {}
-        );
+                new ParameterizedTypeReference<List<UserDto>>() {});
 
         List<UserDto> users = response.getBody();
         if (users == null || users.isEmpty()) {
@@ -43,6 +46,9 @@ public class UserRegisterClient {
         return users.get(0);
     }
 
+    /**
+     * Fetch users by role name; throws ResourceNotFoundException if none found.
+     */
     public List<UserDto> getUsersByRole(String roleName) {
         String url = UriComponentsBuilder
                 .fromHttpUrl(userServiceBaseUrl + "/employee")
@@ -51,8 +57,7 @@ public class UserRegisterClient {
 
         ResponseEntity<List<UserDto>> response = restTemplate.exchange(
                 url, HttpMethod.GET, null,
-                new ParameterizedTypeReference<List<UserDto>>() {}
-        );
+                new ParameterizedTypeReference<List<UserDto>>() {});
 
         List<UserDto> users = response.getBody();
         if (users == null || users.isEmpty()) {
@@ -62,61 +67,73 @@ public class UserRegisterClient {
         return users;
     }
 
+    /**
+     * Fetch user info (userName) by userId(s).
+     * Accepts single or multiple comma-separated userIds.
+     */
     public List<UserInfoDto> getUserInfos(String userIds) {
         String url = userServiceBaseUrl + "/" + userIds + "/username";
 
         ResponseEntity<String> rawResponse = restTemplate.exchange(
-                url,
-                HttpMethod.GET,
-                null,
-                String.class
-        );
+                url, HttpMethod.GET, null, String.class);
 
         String body = rawResponse.getBody();
 
-        // If response starts with [ or {, assume it's JSON; otherwise handle as plain text
         if (body != null && (body.trim().startsWith("[") || body.trim().startsWith("{"))) {
-            // Parse as JSON array
+            // If response is JSON, parse it into List<UserInfoDto>
             ResponseEntity<List<UserInfoDto>> jsonResponse = restTemplate.exchange(
-                    url,
-                    HttpMethod.GET,
-                    null,
-                    new ParameterizedTypeReference<List<UserInfoDto>>() {}
-            );
-            return jsonResponse.getBody();
-        } else {
-            // Convert plain text (like "Sri Ram") into a List<UserInfoDto>
+                    url, HttpMethod.GET, null,
+                    new ParameterizedTypeReference<List<UserInfoDto>>() {});
+            List<UserInfoDto> userInfos = jsonResponse.getBody();
+            if (userInfos == null || userInfos.isEmpty()) {
+                throw new ResourceNotFoundException("No user info found for userIds: " + userIds, ResourceNotFoundException.ResourceType.USER);
+            }
+            return userInfos;
+        } else if (body != null && !body.isBlank()) {
+            // Plain text response assumed to be a username for a single userId
             UserInfoDto dto = new UserInfoDto();
-            dto.setUserId(userIds);           // because we passed only one userId
-            dto.setUserName(body != null ? body.trim() : "");
+            dto.setUserId(userIds.trim());
+            dto.setUserName(body.trim());
             return Collections.singletonList(dto);
+        } else {
+            throw new ResourceNotFoundException("No user info found for userIds: " + userIds, ResourceNotFoundException.ResourceType.USER);
         }
     }
 
+    /**
+     * Fetch email by userId.
+     * Throws ResourceNotFoundException if user or email not found.
+     */
     public String getUserEmail(String userId) {
         String url = userServiceBaseUrl + "/" + userId + "/email";
-        ResponseEntity<String> response = restTemplate.exchange(
-                url,
-                HttpMethod.GET,
-                null,
-                String.class
-        );
-        return response.getBody();
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    url, HttpMethod.GET, null, String.class);
+
+            String email = response.getBody();
+            if (email == null || email.isBlank()) {
+                throw new ResourceNotFoundException("Email not found for user ID: " + userId, ResourceNotFoundException.ResourceType.USER);
+            }
+            return email;
+        } catch (HttpClientErrorException.NotFound ex) {
+            throw new ResourceNotFoundException("User not found with ID: " + userId, ResourceNotFoundException.ResourceType.USER);
+        }
+    }
+
+    /**
+     * Returns the first user with the specified role.
+     * Throws ResourceNotFoundException if none found.
+     */
+    public UserDto getUserNameByRole(String roleName) {
+        List<UserDto> users = getUsersByRole(roleName);
+        return users.get(0);
     }
 
     private void setEmployeeTypeFromRole(UserDto user) {
-        if (user.getRole() != null && user.getRole().equalsIgnoreCase("EXTERNALEMPLOYEE")) {
+        if ("EXTERNALEMPLOYEE".equalsIgnoreCase(user.getRole())) {
             user.setEmployeeType("EXTERNAL");
         } else {
             user.setEmployeeType("INTERNAL");
         }
-    }
-
-    public UserDto getUserNameByRole(String roleName) {
-        List<UserDto> users = getUsersByRole(roleName);
-        if (users.isEmpty()) {
-            throw new ResourceNotFoundException("No user found with role: " + roleName, ResourceNotFoundException.ResourceType.USER);
-        }
-        return users.get(0); // Return the first user found with the specified role
     }
 }

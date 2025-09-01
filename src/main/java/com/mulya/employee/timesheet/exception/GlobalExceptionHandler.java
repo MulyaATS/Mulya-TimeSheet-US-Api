@@ -108,6 +108,9 @@ public class GlobalExceptionHandler{
             case EMPLOYEE:
                 userMessage = "Employee Not Found";
                 break;
+            case CANDIDATE:
+                userMessage = "Candidate Not Found";
+                break;
             default:
                 userMessage = "Resource Not Found";
         }

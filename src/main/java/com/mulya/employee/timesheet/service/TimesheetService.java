@@ -784,5 +784,17 @@ public class TimesheetService {
         return weeks;
     }
 
+    public List<String> getVendorNamesByUserId(String userId) {
+        String userEmail = userRegisterClient.getUserEmail(userId); // may throw ResourceNotFoundException
+
+        List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(userEmail); // may also throw ResourceNotFoundException
+
+        return placements.stream()
+                .map(PlacementDetailsDto::getVendorName)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+    }
+
 }
 
