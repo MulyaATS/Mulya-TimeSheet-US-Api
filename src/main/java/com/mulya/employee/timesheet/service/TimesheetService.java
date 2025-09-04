@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.time.*;
+import java.time.temporal.TemporalAdjusters;
 import java.util.*;
 import java.util.stream.Collectors;
 @Service
@@ -65,35 +66,51 @@ public class TimesheetService {
             errors.put("userId", "User not found: " + userId);
             throw new ValidationException(errors);
         }
-        String employeeType = (req.getType() == TimesheetType.DAILY) ? "INTERNAL" : "EXTERNAL";
 
-        if ("INTERNAL".equalsIgnoreCase(employeeType) && req.getType() != TimesheetType.DAILY) {
+        // Fetch employee working type from Placements service
+        String employeeWorkingType;
+        try {
+            employeeWorkingType = fetchEmployeeWorkingTypeFromPlacements(userId);
+        } catch (Exception e) {
+            // fallback to WEEKLY for safety
+            employeeWorkingType = "WEEKLY";
+            logger.warn("Could not fetch employee working type for userId {}: {}", userId, e.getMessage());
+        }
+
+        TimesheetType timesheetType = TimesheetType.valueOf(employeeWorkingType.toUpperCase());
+
+        String employeeType = employeeWorkingType.equals("DAILY") ? "INTERNAL" : "EXTERNAL";
+
+        // Validation only for weekly employees on submitted date (UI handles monthly date validation)
+        if ("INTERNAL".equalsIgnoreCase(employeeType) && !employeeWorkingType.equalsIgnoreCase("DAILY")) {
             errors.put("timesheetType", "Internal employees must submit DAILY timesheets");
         }
-        if ("EXTERNAL".equalsIgnoreCase(employeeType)) {
-            if (req.getType() != TimesheetType.WEEKLY) {
-                errors.put("timesheetType", "External employees must submit WEEKLY");
-            }
-            if (req.getDate().getDayOfWeek() != DayOfWeek.MONDAY) {
-                errors.put("date", "Weekly timesheets must start on a Monday");
+
+        if ("EXTERNAL".equalsIgnoreCase(employeeType) && employeeWorkingType.equalsIgnoreCase("WEEKLY")) {
+            // Validate weekly timesheet date start is Monday (or partial first week)
+            LocalDate submitDate = req.getDate();
+            if (submitDate.getDayOfWeek() != DayOfWeek.MONDAY) {
+                LocalDate monthStart = submitDate.withDayOfMonth(1);
+                if (!(submitDate.equals(monthStart) && submitDate.getDayOfWeek() != DayOfWeek.MONDAY)) {
+                    errors.put("date", "Weekly timesheets must start on a Monday, or the actual month start for first partial week");
+                }
             }
         }
+
         if (!errors.isEmpty()) throw new ValidationException(errors);
 
-        if ("INTERNAL".equalsIgnoreCase(employeeType)) {
-            return saveDailyRecord(userId, req, employeeType);
-        }
-
         String note = req.getNotes();
+        LocalDate submitDate = req.getDate();
 
-        LocalDate weekStart = req.getDate();
-        LocalDate weekEnd = weekStart.plusDays(4);
-        Timesheet ts = timesheetRepository
-                .findByUserIdAndWeekStartDate(userId, weekStart)
+        // Calculate weekStartDate as Monday of submitDate's week (timesheets saved weekly)
+        LocalDate weekStart = submitDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        LocalDate weekEnd = weekStart.plusDays(4); // Friday
+
+        Timesheet ts = timesheetRepository.findByUserIdAndWeekStartDate(userId, weekStart)
                 .orElseGet(() -> {
                     Timesheet t = new Timesheet();
                     t.setUserId(userId);
-                    t.setTimesheetType(TimesheetType.WEEKLY);
+                    t.setTimesheetType(timesheetType);
                     t.setTimesheetDate(weekStart);
                     t.setWeekStartDate(weekStart);
                     t.setWeekEndDate(weekEnd);
@@ -103,32 +120,37 @@ public class TimesheetService {
                     t.setNonWorkingHours("[]");
                     t.setPercentageOfTarget(0.0);
                     t.setNotes(note);
-                    String newTimesheetId = generateNextTimesheetId();
-                    t.setTimesheetId(newTimesheetId);
+                    t.setTimesheetId(generateNextTimesheetId());
                     return t;
                 });
 
         List<TimesheetEntry> currentWorkingHours;
         List<TimesheetEntry> currentNonWorkingHours;
+
         try {
             currentWorkingHours = mapper.readValue(ts.getWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
         } catch (Exception e) {
             currentWorkingHours = new ArrayList<>();
         }
+
         try {
             currentNonWorkingHours = mapper.readValue(ts.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
         } catch (Exception e) {
             currentNonWorkingHours = new ArrayList<>();
         }
+
         List<TimesheetEntry> newWorkingEntries = req.getWorkingEntries();
         List<TimesheetEntry> newNonWorkingEntries = req.getNonWorkingEntries();
 
-        // Check for duplicate dates in working entries
+        // Duplicate date check only within this timesheet week range
         Set<LocalDate> existingWorkingDates = currentWorkingHours.stream()
                 .map(TimesheetEntry::getDate)
                 .collect(Collectors.toSet());
 
         for (TimesheetEntry newEntry : newWorkingEntries) {
+            if (newEntry.getDate().isBefore(ts.getWeekStartDate()) || newEntry.getDate().isAfter(ts.getWeekEndDate())) {
+                throw new IllegalArgumentException("Entry date " + newEntry.getDate() + " is outside the current timesheet's week range.");
+            }
             if (existingWorkingDates.contains(newEntry.getDate())) {
                 throw new IllegalArgumentException("Duplicate working hour entry for date: " + newEntry.getDate());
             }
@@ -144,12 +166,15 @@ public class TimesheetService {
             throw new RuntimeException("Error serializing working/non-working hours JSON", e);
         }
 
-        // Calculate total working hours for percentageOfTarget
-        double totalWorkingHours = currentWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
-        ts.setPercentageOfTarget((totalWorkingHours / 40.0) * 100);
+        long workingDaysCount = weekStart.datesUntil(weekEnd.plusDays(1))
+                .filter(d -> d.getDayOfWeek() != DayOfWeek.SATURDAY && d.getDayOfWeek() != DayOfWeek.SUNDAY)
+                .count();
 
-        // --- New logic to update leaves taken ---
-        // Sum total leave hours added (non-working hours)
+        double targetHours = workingDaysCount * 8.0;
+
+        double totalWorkingHours = currentWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
+        ts.setPercentageOfTarget((totalWorkingHours / targetHours) * 100);
+
         double totalLeaveHoursAdded = newNonWorkingEntries.stream()
                 .mapToDouble(TimesheetEntry::getHours)
                 .sum();
@@ -166,17 +191,37 @@ public class TimesheetService {
                 if (employeeName == null || employeeName.isBlank()) {
                     employeeName = "";
                 }
-                leaveService.updateLeaveOnLeaveTaken(userId, leaveDaysTaken,employeeName );
+                leaveService.updateLeaveOnLeaveTaken(userId, leaveDaysTaken, employeeName);
                 logger.info("Updated leave taken for userId {} by {} days", userId, leaveDaysTaken);
             } catch (Exception e) {
                 logger.error("Failed to update leave taken for userId {}: {}", userId, e.getMessage(), e);
-                // Optionally handle or rethrow exception
             }
         }
 
         return timesheetRepository.save(ts);
     }
 
+    private String fetchEmployeeWorkingTypeFromPlacements(String userId) throws Exception {
+        // 1. Get employee email by userID
+        String email = userRegisterClient.getUserEmail(userId);
+        if (email == null || email.isBlank()) {
+            throw new Exception("User email not found for userId: " + userId);
+        }
+
+        // 2. Fetch placements by email
+        List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(email);
+        if (placements == null || placements.isEmpty()) {
+            throw new Exception("No placements found for email: " + email);
+        }
+
+        // 3. Extract employee working type from first placement (adjust logic if multiple)
+        String employeeWorkingType = placements.get(0).getEmployeeWorkingType();
+        if (employeeWorkingType == null || employeeWorkingType.isBlank()) {
+            throw new Exception("Employee working type not set in placement for email: " + email);
+        }
+
+        return employeeWorkingType.toUpperCase(); // Ensure uppercase for enum consistency
+    }
 
     public String generateNextTimesheetId() {
         // Query the max existing timesheetId from DB
@@ -366,11 +411,41 @@ public class TimesheetService {
         return entries.stream().mapToDouble(TimesheetEntry::getHours).sum();
     }
 
-    public List<TimesheetResponse> getTimesheetsByUserId(String userId) {
-        return timesheetRepository.findByUserId(userId)
-                .stream()
-                .map(this::mapToResponse) // map entity -> DTO
-                .collect(Collectors.toList());
+    public MonthlyTimesheetResponse getTimesheetsByUserIdAndMonth(String userId, LocalDate monthStart, LocalDate monthEnd) {
+        List<Timesheet> timesheets = timesheetRepository.findTimesheetsOverlappingMonth(userId, monthStart, monthEnd);
+
+        final double[] totalMonthlyWorkingHours = {0.0};
+        List<TimesheetResponse> dtos = timesheets.stream().map(ts -> {
+            TimesheetResponse resp = mapToResponse(ts);
+
+            resp.setWorkingEntries(resp.getWorkingEntries().stream()
+                    .filter(e -> {
+                        LocalDate d = LocalDate.parse(e.getDate().toString());
+                        return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
+                    }).collect(Collectors.toList()));
+
+            resp.setNonWorkingEntries(resp.getNonWorkingEntries().stream()
+                    .filter(e -> {
+                        LocalDate d = LocalDate.parse(e.getDate().toString());
+                        return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
+                    }).collect(Collectors.toList()));
+
+            try {
+                double sumThisSheet = resp.getWorkingEntries().stream()
+                        .mapToDouble(TimesheetEntry::getHours)
+                        .sum();
+                totalMonthlyWorkingHours[0] += sumThisSheet;
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+
+            return resp;
+        }).collect(Collectors.toList());
+
+        MonthlyTimesheetResponse response = new MonthlyTimesheetResponse();
+        response.setTimesheets(dtos);
+        response.setTotalWorkingHours(totalMonthlyWorkingHours[0]);
+        return response;
     }
 
     public List<TimesheetResponse> getAllTimesheets() {
@@ -394,8 +469,34 @@ public class TimesheetService {
         resp.setTimesheetId(ts.getTimesheetId());
         resp.setUserId(ts.getUserId());
         resp.setEmployeeName(employeeName);
-        resp.setEmployeeRoleType(ts.getEmployeeType());
-        resp.setTimesheetType(ts.getTimesheetType());
+        resp.setEmployeeType(ts.getEmployeeType());
+
+        // Fetch timesheetType dynamically from placements:
+        if (employeeEmail != null && !employeeEmail.isBlank()) {
+            try {
+                System.out.println("Calling CandidateClient with email: " + employeeEmail);
+                List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(employeeEmail);
+                System.out.println("Number of placements received: " + (placements == null ? 0 : placements.size()));
+                if (placements != null && !placements.isEmpty()) {
+                    PlacementDetailsDto placement = placements.get(0);
+                    resp.setTimesheetType(TimesheetType.valueOf(placement.getEmployeeWorkingType()));
+                    resp.setStartDate(placement.getStartDate());
+                    resp.setClientName(placement.getClientName());
+                    resp.setEmployeeRoleType(placement.getEmployeeType());
+                    System.out.println("Timesheet employeeType (from entity): " + placement.getEmployeeType());
+
+                } else {
+                    resp.setTimesheetType(TimesheetType.WEEKLY); // fallback default
+                }
+            } catch (Exception ex) {
+                System.err.println("Error fetching placement details for email: " + employeeEmail);
+                ex.printStackTrace();
+                resp.setTimesheetType(TimesheetType.WEEKLY);
+            }
+        } else {
+            resp.setTimesheetType(TimesheetType.WEEKLY);
+        }
+
         resp.setTimesheetDate(ts.getTimesheetDate());
         resp.setWeekStartDate(ts.getWeekStartDate());
         resp.setWeekEndDate(ts.getWeekEndDate());
@@ -444,34 +545,6 @@ public class TimesheetService {
             resp.setAttachments(List.of());
         }
 
-        if (employeeEmail != null && !employeeEmail.isBlank()) {
-            try {
-                System.out.println("Calling CandidateClient with email: " + employeeEmail);
-                List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(employeeEmail);
-                System.out.println("Number of placements received: " + (placements == null ? 0 : placements.size()));
-                if (placements != null && !placements.isEmpty()) {
-                    PlacementDetailsDto placement = placements.get(0); // pick first or apply logic
-                    resp.setStartDate(placement.getStartDate());
-                    resp.setClientName(placement.getClientName());
-                    resp.setEmployeeType(placement.getEmployeeType());
-                    System.out.println("Placement startDate: " + placement.getStartDate() + ", clientName: " + placement.getClientName());
-                } else {
-                    System.out.println("No placements found for email: " + employeeEmail);
-                    resp.setStartDate(null);
-                    resp.setClientName(null);
-                }
-            } catch (Exception ex) {
-                System.err.println("Error fetching placement details from candidate service for email: " + employeeEmail);
-                ex.printStackTrace();
-                resp.setStartDate(null);
-                resp.setClientName(null);
-            }
-        } else {
-            System.out.println("Employee email is null or blank, skipping candidate service call.");
-            resp.setStartDate(null);
-            resp.setClientName(null);
-        }
-
         return resp;
     }
 
@@ -484,12 +557,6 @@ public class TimesheetService {
             throw new SecurityException("Unauthorized to update this timesheet");
         }
 
-        // Confirm type is WEEKLY to prevent misuse
-        if (req.getType() != TimesheetType.WEEKLY) {
-            throw new IllegalArgumentException("Only WEEKLY timesheet can be updated with this method");
-        }
-
-        ts.setTimesheetType(req.getType());
         ts.setTimesheetDate(req.getDate());
 
         // Update notes if present in request
@@ -790,7 +857,7 @@ public class TimesheetService {
         List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(userEmail); // may also throw ResourceNotFoundException
 
         return placements.stream()
-                .map(PlacementDetailsDto::getVendorName)
+                .map(PlacementDetailsDto::getClientName)
                 .filter(Objects::nonNull)
                 .distinct()
                 .collect(Collectors.toList());

@@ -9,9 +9,6 @@ import java.util.List;
 
 public class TimesheetRequest {
 
-    @NotNull(message = "Timesheet type must be provided")
-    private TimesheetType type;
-
     @NotNull(message = "Date must be provided")
     private LocalDate date;
 
@@ -33,9 +30,6 @@ public class TimesheetRequest {
         }
         this.notes = notes;
     }
-    public TimesheetType getType() { return type; }
-    public void setType(TimesheetType type) { this.type = type; }
-
     public LocalDate getDate() { return date; }
     public void setDate(LocalDate date) { this.date = date; }
     public List<TimesheetEntry> getWorkingEntries() { return workingEntries; }

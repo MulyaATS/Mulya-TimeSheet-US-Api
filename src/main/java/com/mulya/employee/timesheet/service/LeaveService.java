@@ -169,7 +169,7 @@ public class LeaveService {
             int monthsRemaining = 12 - joiningDate.getMonthValue() + 1;
             finalAvailableLeaves = monthsRemaining; // 1 leave per month
         } else {
-            finalAvailableLeaves = -1; // For other types like C2C
+            finalAvailableLeaves = 0; // For other types like C2C
         }
 
         Optional<EmployeeLeaveSummary> optionalSummary = employeeLeaveSummaryRepository.findByUserId(userId);

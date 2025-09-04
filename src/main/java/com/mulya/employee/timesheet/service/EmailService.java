@@ -16,6 +16,7 @@ public class EmailService {
     private JavaMailSender mailSender;
 
     private void sendHtmlEmail(String to, String subject, String htmlBody) {
+
     try {
         MimeMessage message = mailSender.createMimeMessage();
         MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
@@ -30,6 +31,7 @@ public class EmailService {
         System.err.println("Email send failure: " + e.getMessage());
         e.printStackTrace();
         throw new RuntimeException("Failed to send email to " + to, e);
+
     }
 }
 

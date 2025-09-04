@@ -148,10 +148,15 @@ public class TimesheetController {
 
 
     @GetMapping("/getTimesheetsByUserId")
-    public ResponseEntity<ApiResponse<List<TimesheetResponse>>> getUserTimesheets(@RequestParam String userId) {
-        List<TimesheetResponse> responses = timesheetService.getTimesheetsByUserId(userId);
-        return ResponseEntity.ok(ApiResponse.success("Timesheets retrieved", responses));
+    public ResponseEntity<ApiResponse<MonthlyTimesheetResponse>> getUserTimesheets(
+            @RequestParam String userId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthStart,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthEnd)
+    {
+        MonthlyTimesheetResponse monthlyResponse = timesheetService.getTimesheetsByUserIdAndMonth(userId, monthStart, monthEnd);
+        return ResponseEntity.ok(ApiResponse.success("Timesheets retrieved", monthlyResponse));
     }
+
 
     @GetMapping("/getAllTimesheets")
     public ResponseEntity<ApiResponse<List<TimesheetResponse>>> getAllTimesheets() {
@@ -245,14 +250,6 @@ public class TimesheetController {
             @RequestParam String userId,
             @Valid @RequestBody TimesheetRequest request) throws Exception {
 
-        if (request.getType() != TimesheetType.WEEKLY) {
-            return ResponseEntity.badRequest().body(ApiResponse.error(
-                    "Invalid timesheet type for this endpoint",
-                    String.valueOf(HttpStatus.BAD_REQUEST.value()),
-                    "Only WEEKLY timesheets can be updated via this method"
-            ));
-        }
-
         Timesheet updated = timesheetService.updateTimesheet(id, userId, request);
         TimesheetSummaryDto summaryDto = timesheetService.toSummaryDto(updated);
         return ResponseEntity.ok(ApiResponse.success("Weekly timesheet updated successfully", summaryDto));
@@ -284,7 +281,7 @@ public class TimesheetController {
         }
     }
 
-    @PutMapping("/{userId}/update-leave-taken")
+    @PatchMapping("/{userId}/update-leave-taken")
     public ResponseEntity<ApiResponse<EmployeeLeaveSummaryDto>> updateLeaveTaken(
             @PathVariable String userId,
             @RequestBody LeaveTakenUpdateRequest request) {
