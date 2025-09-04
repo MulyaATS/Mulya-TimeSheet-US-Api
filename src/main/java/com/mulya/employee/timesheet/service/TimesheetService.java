@@ -293,6 +293,41 @@ public class TimesheetService {
     }
 
     @Transactional
+    public List<Timesheet> submitMonthly(String userId, LocalDate monthStartDate) {
+        if (monthStartDate.getDayOfMonth() != 1) {
+            throw new IllegalArgumentException("Month start date must be the first day of the month");
+        }
+        LocalDate monthEndDate = monthStartDate.withDayOfMonth(monthStartDate.lengthOfMonth());
+
+        List<Timesheet> timesheets = timesheetRepository.findTimesheetsOverlappingMonth(userId, monthStartDate, monthEndDate);
+
+        if (timesheets.isEmpty()) {
+            throw new IllegalArgumentException("No timesheets found overlapping the month " + monthStartDate);
+        }
+
+        UserDto managerDto = userRegisterClient.getUsersByRole("ACCOUNTS")
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("No ACCOUNTS manager"));
+        UserInfoDto managerInfo = userRegisterClient.getUserInfos(managerDto.getUserId()).get(0);
+
+        for (Timesheet ts : timesheets) {
+            ts.setStatus("PENDING_APPROVAL");
+            UserInfoDto empInfo = userRegisterClient.getUserInfos(ts.getUserId()).get(0);
+
+            emailService.sendManagerApprovalRequestEmail(
+                    ts,
+                    managerDto.getEmail(),
+                    managerInfo.getUserName(),
+                    empInfo.getUserName()
+            );
+        }
+
+        return timesheetRepository.saveAll(timesheets);
+    }
+
+
+    @Transactional
     public Timesheet approveTimesheet(String id, String managerUserId) {
         Timesheet ts = timesheetRepository.findByTimesheetId(id)
                 .orElseThrow(() -> new IllegalArgumentException("Timesheet not found"));
@@ -350,6 +385,84 @@ public class TimesheetService {
 
         return timesheetRepository.save(ts);
     }
+
+    @Transactional
+    public List<Timesheet> approveMonthlyTimesheets(String userId, LocalDate monthStart, LocalDate monthEnd, String managerUserId) {
+        List<Timesheet> timesheets = timesheetRepository.findTimesheetsOverlappingMonth(userId, monthStart, monthEnd);
+
+        if (timesheets.isEmpty()) {
+            throw new IllegalArgumentException("No timesheets found overlapping the month");
+        }
+
+        UserInfoDto managerInfo = userRegisterClient.getUserInfos(managerUserId).get(0);
+        if (managerInfo.getUserName() == null) {
+            throw new IllegalStateException("Manager name not found for " + managerUserId);
+        }
+
+        for (Timesheet ts : timesheets) {
+            ts.setStatus("APPROVED");
+            ts.setApprovedAt(LocalDateTime.now());
+            ts.setApprovedBy(managerInfo.getUserName());
+        }
+
+        Timesheet savedTimesheets = timesheetRepository.saveAll(timesheets).get(0);
+        // Just fetch one to get user info - they are all for same user
+
+        // Send single consolidated monthly approval email
+        UserInfoDto empInfo = userRegisterClient.getUserInfos(userId).get(0);
+        String empEmail = userRegisterClient.getUserEmail(userId);
+        String monthStartStr = monthStart.toString();
+        String monthEndStr = monthEnd.toString();
+
+        emailService.sendEmployeeMonthlyApprovalEmail(
+                empEmail,
+                empInfo.getUserName(),
+                monthStartStr,
+                monthEndStr
+        );
+
+        return timesheets;
+    }
+
+
+    @Transactional
+    public List<Timesheet> rejectMonthlyTimesheets(String userId, LocalDate monthStart, LocalDate monthEnd, String managerUserId, String reason) {
+        List<Timesheet> timesheets = timesheetRepository.findTimesheetsOverlappingMonth(userId, monthStart, monthEnd);
+
+        if (timesheets.isEmpty()) {
+            throw new IllegalArgumentException("No timesheets found overlapping the month");
+        }
+
+        UserInfoDto managerInfo = userRegisterClient.getUserInfos(managerUserId).get(0);
+        if (managerInfo.getUserName() == null) {
+            throw new IllegalStateException("Manager name not found for " + managerUserId);
+        }
+
+        for (Timesheet ts : timesheets) {
+            ts.setStatus("REJECTED");
+            ts.setApprovedAt(LocalDateTime.now());
+            ts.setApprovedBy(managerInfo.getUserName());
+        }
+
+        timesheetRepository.saveAll(timesheets);
+
+        // Send a single consolidated rejection email
+        UserInfoDto empInfo = userRegisterClient.getUserInfos(userId).get(0);
+        String empEmail = userRegisterClient.getUserEmail(userId);
+        String monthStartStr = monthStart.toString();
+        String monthEndStr = monthEnd.toString();
+
+        emailService.sendEmployeeMonthlyRejectionEmail(
+                empEmail,
+                empInfo.getUserName(),
+                monthStartStr,
+                monthEndStr,
+                reason
+        );
+
+        return timesheets;
+    }
+
 
     public Page<TimesheetApprovalDto> getTimesheetsByStatus(String status, String managerUserId, Pageable pageable) {
         Page<Timesheet> timesheetPage = timesheetRepository.findByStatus(status, pageable);

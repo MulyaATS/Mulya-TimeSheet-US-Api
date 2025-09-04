@@ -90,6 +90,42 @@ public class EmailService {
         sendHtmlEmail(employeeEmail, subject, htmlBody);
     }
 
+    // Monthly timesheet approval notification with month start/end dates
+    public void sendEmployeeMonthlyApprovalEmail(String employeeEmail, String employeeName,
+                                                 String monthStartDate, String monthEndDate) {
+        String subject = "Monthly Timesheet Approved";
+        String htmlBody = buildCardTemplate(
+                "Monthly Timesheet Approved",
+                "Dear " + employeeName + ",<br><br>"
+                        + "Your monthly timesheet for <strong>" + monthStartDate + "</strong> to <strong>" + monthEndDate + "</strong> has been "
+                        + "<span style='color:green;font-weight:bold;'>approved</span>.<br>"
+                        + "Great job and thank you for your submission!",
+                null, null, null, null,
+                "Best regards,<br>Mulya Team"
+        );
+        sendHtmlEmail(employeeEmail, subject, htmlBody);
+    }
+
+
+    // Monthly timesheet rejection notification with month start/end dates and reason
+    public void sendEmployeeMonthlyRejectionEmail(String employeeEmail, String employeeName,
+                                                  String monthStartDate, String monthEndDate, String reason) {
+        String subject = "Monthly Timesheet Rejected – Action Required";
+        String htmlBody = buildCardTemplate(
+                "Monthly Timesheet Rejected – Action Required",
+                "Dear " + employeeName + ",<br><br>"
+                        + "Your monthly timesheet for <strong>" + monthStartDate + "</strong> to <strong>" + monthEndDate + "</strong> has been "
+                        + "<span style='color:red;font-weight:bold;'>rejected</span> by the manager.<br>"
+                        + "<div style='margin:10px 0 18px 0;border-left:4px solid #ffbdbd;"
+                        + "padding-left:12px;background:#fff7f7;color:#b70000;'>"
+                        + "<strong>Reason for rejection:</strong><br>" + reason + "</div>"
+                        + "Please review the feedback, make necessary changes, and resubmit your timesheet for approval.",
+                null, null, null, null,
+                "Thank you,<br>Mulya Team"
+        );
+        sendHtmlEmail(employeeEmail, subject, htmlBody);
+    }
+
     private String buildCardTemplate(String header, String bodyText,
                                      String infoLabel, String infoValue,
                                      String buttonUrl, String buttonText,

@@ -33,5 +33,4 @@ public interface TimesheetRepository  extends JpaRepository<Timesheet, Long> {
             @Param("userId") String userId,
             @Param("monthStart") LocalDate monthStart,
             @Param("monthEnd") LocalDate monthEnd);
-
 }
