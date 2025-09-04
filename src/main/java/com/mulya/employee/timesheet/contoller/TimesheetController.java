@@ -74,6 +74,25 @@ public class TimesheetController {
         return ResponseEntity.ok(ApiResponse.success("Submitted for approval", approvalDto));
     }
 
+    @PostMapping("/submit-monthly")
+    public ResponseEntity<ApiResponse<List<TimesheetApprovalDto>>> submitMonthly(
+            @RequestParam String userId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthStartDate) {
+
+        List<Timesheet> updatedTimesheets = timesheetService.submitMonthly(userId, monthStartDate);
+
+        UserDto managerDto = userRegisterClient.getUsersByRole("ACCOUNTS")
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("No ACCOUNTS manager"));
+
+        List<TimesheetApprovalDto> approvalDtos = updatedTimesheets.stream()
+                .map(ts -> timesheetService.toApprovalDto(ts, managerDto.getUserId()))
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(ApiResponse.success("Submitted monthly timesheets for approval", approvalDtos));
+    }
+
 
     @PostMapping("/approve")
     public ResponseEntity<ApiResponse<TimesheetApprovalDto>> approve(
@@ -85,6 +104,43 @@ public class TimesheetController {
 
         return ResponseEntity.ok(ApiResponse.success("Timesheet approved", approvalDto));
     }
+
+    @PostMapping("/approve-monthly")
+    public ResponseEntity<ApiResponse<List<TimesheetApprovalDto>>> approveMonthly(
+            @RequestParam String userId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthStart,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthEnd,
+            @RequestParam String managerUserId) {
+
+        List<Timesheet> updated = timesheetService.approveMonthlyTimesheets(userId, monthStart, monthEnd, managerUserId);
+
+        List<TimesheetApprovalDto> dtos = updated.stream()
+                .map(ts -> timesheetService.toApprovalDto(ts, managerUserId))
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(ApiResponse.success("Monthly timesheets approved", dtos));
+    }
+
+
+    @PostMapping("/reject-monthly")
+    public ResponseEntity<ApiResponse<List<TimesheetApprovalDto>>> rejectMonthly(
+            @RequestParam String userId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthStart,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthEnd,
+            @RequestParam String managerUserId,
+            @RequestParam String reason) {
+
+        List<Timesheet> updated = timesheetService.rejectMonthlyTimesheets(userId, monthStart, monthEnd, managerUserId, reason);
+
+        List<TimesheetApprovalDto> dtos = updated.stream()
+                .map(ts -> timesheetService.toApprovalDto(ts, managerUserId))
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(ApiResponse.success("Monthly timesheets rejected", dtos));
+    }
+
+
+
 
     @PostMapping("/reject")
     public ResponseEntity<ApiResponse<TimesheetApprovalDto>> reject(
