@@ -19,14 +19,16 @@ public class EmailService {
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+
+            helper.setFrom("notifications@adroitinnovative.com"); // 👈 force sender
             helper.setTo(to);
             helper.setSubject(subject);
             helper.setText(htmlBody, true);
+
             mailSender.send(message);
         } catch (Exception e) {
-            // ✅ Print the actual cause to logs before rethrowing
             System.err.println("Email send failure: " + e.getMessage());
-            e.printStackTrace();  // ✅ Full stack trace in logs
+            e.printStackTrace();
             throw new RuntimeException("Failed to send email to " + to, e);
         }
     }

@@ -12,6 +12,14 @@ public class PlacementDetailsDto {
     @JsonProperty("employmentType")
     private String employeeType;
     private String VendorName;
+    private String employeeWorkingType;
+
+    public String getEmployeeWorkingType() {
+        return employeeWorkingType;
+    }
+    public void setEmployeeWorkingType(String employeeWorkingType) {
+        this.employeeWorkingType = employeeWorkingType;
+    }
 
     public LocalDate getStartDate() {
         return startDate;
