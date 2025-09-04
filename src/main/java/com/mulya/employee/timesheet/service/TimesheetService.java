@@ -448,6 +448,14 @@ public class TimesheetService {
         return response;
     }
 
+    public List<TimesheetResponse> getAllTimesheetsByUserId(String userId) {
+        List<Timesheet> timesheets = timesheetRepository.findByUserId(userId);
+        return timesheets.stream()
+                .map(this::mapToResponse)
+                .collect(Collectors.toList());
+    }
+
+
     public List<TimesheetResponse> getAllTimesheets() {
         return timesheetRepository.findAll()
                 .stream()

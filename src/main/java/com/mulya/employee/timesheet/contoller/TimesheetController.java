@@ -148,13 +148,18 @@ public class TimesheetController {
 
 
     @GetMapping("/getTimesheetsByUserId")
-    public ResponseEntity<ApiResponse<MonthlyTimesheetResponse>> getUserTimesheets(
+    public ResponseEntity<ApiResponse<?>> getUserTimesheets(
             @RequestParam String userId,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthStart,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthEnd)
-    {
-        MonthlyTimesheetResponse monthlyResponse = timesheetService.getTimesheetsByUserIdAndMonth(userId, monthStart, monthEnd);
-        return ResponseEntity.ok(ApiResponse.success("Timesheets retrieved", monthlyResponse));
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthStart,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate monthEnd) {
+
+        if (monthStart != null && monthEnd != null) {
+            MonthlyTimesheetResponse monthlyResponse = timesheetService.getTimesheetsByUserIdAndMonth(userId, monthStart, monthEnd);
+            return ResponseEntity.ok(ApiResponse.success("Timesheets retrieved", monthlyResponse));
+        } else {
+            List<TimesheetResponse> allTimesheets = timesheetService.getAllTimesheetsByUserId(userId);
+            return ResponseEntity.ok(ApiResponse.success("All timesheets retrieved", allTimesheets));
+        }
     }
 
 
