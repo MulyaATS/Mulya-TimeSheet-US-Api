@@ -151,12 +151,21 @@ public class TimesheetService {
             if (newEntry.getDate().isBefore(ts.getWeekStartDate()) || newEntry.getDate().isAfter(ts.getWeekEndDate())) {
                 throw new IllegalArgumentException("Entry date " + newEntry.getDate() + " is outside the current timesheet's week range.");
             }
-            if (existingWorkingDates.contains(newEntry.getDate())) {
-                throw new IllegalArgumentException("Duplicate working hour entry for date: " + newEntry.getDate());
-            }
         }
 
+        // --- Overwrite existing working entries with same dates ---
+        Set<LocalDate> newWorkingDates = newWorkingEntries.stream()
+                .map(TimesheetEntry::getDate)
+                .collect(Collectors.toSet());
+
+        // Remove existing entries with dates that appear in newWorkingEntries
+        currentWorkingHours.removeIf(entry -> newWorkingDates.contains(entry.getDate()));
+
+        // Add new working entries (overwrite)
         currentWorkingHours.addAll(newWorkingEntries);
+
+        // For non-working hours, if you want to overwrite as well, use same logic; otherwise, just add
+        // Here I assume adding (not overwrite) like before
         currentNonWorkingHours.addAll(newNonWorkingEntries);
 
         try {
@@ -166,10 +175,19 @@ public class TimesheetService {
             throw new RuntimeException("Error serializing working/non-working hours JSON", e);
         }
 
-        long workingDaysCount = weekStart.datesUntil(weekEnd.plusDays(1))
-                .filter(d -> d.getDayOfWeek() != DayOfWeek.SATURDAY && d.getDayOfWeek() != DayOfWeek.SUNDAY)
-                .count();
+        // === Updated target hours and percentage calculation ===
+        // Always count full week Mon-Fri (5 working days) = 40 hours target for weekly timesheets,
+        // even if those dates span two months (e.g. July 28 - Aug 1)
 
+        long workingDaysCount = 0;
+        LocalDate d = weekStart;
+        while (!d.isAfter(weekEnd)) {
+            DayOfWeek day = d.getDayOfWeek();
+            if (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY) {
+                workingDaysCount++;
+            }
+            d = d.plusDays(1);
+        }
         double targetHours = workingDaysCount * 8.0;
 
         double totalWorkingHours = currentWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
@@ -183,13 +201,10 @@ public class TimesheetService {
 
         if (leaveDaysTaken > 0) {
             try {
-                String employeeName = null;
+                String employeeName = "";
                 List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(userId);
                 if (userInfos != null && !userInfos.isEmpty()) {
                     employeeName = userInfos.get(0).getUserName();
-                }
-                if (employeeName == null || employeeName.isBlank()) {
-                    employeeName = "";
                 }
                 leaveService.updateLeaveOnLeaveTaken(userId, leaveDaysTaken, employeeName);
                 logger.info("Updated leave taken for userId {} by {} days", userId, leaveDaysTaken);
@@ -200,6 +215,7 @@ public class TimesheetService {
 
         return timesheetRepository.save(ts);
     }
+
 
     private String fetchEmployeeWorkingTypeFromPlacements(String userId) throws Exception {
         // 1. Get employee email by userID
@@ -730,9 +746,30 @@ public class TimesheetService {
         ts.setWorkingHours(mapper.writeValueAsString(currentWorkingEntries));
         ts.setNonWorkingHours(mapper.writeValueAsString(currentNonWorkingEntries));
 
-        // Calculate total working hours only
+        // === Updated target percentage calculation here ===
         double totalWorkingHours = currentWorkingEntries.stream().mapToDouble(TimesheetEntry::getHours).sum();
-        double target = ts.getTimesheetType() == TimesheetType.DAILY ? 8.0 : 40.0;
+
+        double target;
+
+        if (ts.getTimesheetType() == TimesheetType.DAILY) {
+            target = 8.0;
+        } else {
+            // For weekly timesheets, calculate target as full working hours of full week (Mon-Fri)
+            LocalDate weekStart = ts.getWeekStartDate();
+            LocalDate weekEnd = ts.getWeekEndDate();
+
+            long workingDaysCount = 0;
+            LocalDate d = weekStart;
+            while (!d.isAfter(weekEnd)) {
+                DayOfWeek day = d.getDayOfWeek();
+                if (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY) {
+                    workingDaysCount++;
+                }
+                d = d.plusDays(1);
+            }
+            target = workingDaysCount * 8.0;
+        }
+
         ts.setPercentageOfTarget((totalWorkingHours / target) * 100);
 
         return timesheetRepository.save(ts);
