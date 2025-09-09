@@ -17,9 +17,6 @@ public class EmployeeLeaveSummary {
     @Column(nullable = false)
     private Integer takenLeaves;
 
-    @Column(nullable = false)
-    private Integer leaveBalance;
-
     @Column(nullable = true)
     private String updatedBy;
 
@@ -56,14 +53,6 @@ public class EmployeeLeaveSummary {
 
     public void setTakenLeaves(Integer takenLeaves) {
         this.takenLeaves = takenLeaves;
-    }
-
-    public Integer getLeaveBalance() {
-        return leaveBalance;
-    }
-
-    public void setLeaveBalance(Integer leaveBalance) {
-        this.leaveBalance = leaveBalance;
     }
 
     public String getUpdatedBy() {

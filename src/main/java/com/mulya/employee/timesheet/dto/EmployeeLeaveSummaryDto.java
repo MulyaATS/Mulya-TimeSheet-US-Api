@@ -12,8 +12,6 @@ public class EmployeeLeaveSummaryDto {
 
     private Integer takenLeaves;
 
-    private Integer leaveBalance;
-
     private String updatedBy;
 
     private LocalDateTime updatedAt = LocalDateTime.now();
@@ -65,14 +63,6 @@ public class EmployeeLeaveSummaryDto {
 
     public void setTakenLeaves(Integer takenLeaves) {
         this.takenLeaves = takenLeaves;
-    }
-
-    public Integer getLeaveBalance() {
-        return leaveBalance;
-    }
-
-    public void setLeaveBalance(Integer leaveBalance) {
-        this.leaveBalance = leaveBalance;
     }
 
     public String getUpdatedBy() {

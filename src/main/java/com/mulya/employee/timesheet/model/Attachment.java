@@ -28,8 +28,8 @@ public class Attachment {
     private LocalDate weekEndDate;
 
     @Lob
-    @Column(name = "content")
-    private byte[] content;    // File binary (if storing inside DB)
+    @Column(name = "content", columnDefinition = "LONGBLOB")
+    private byte[] content;
 
     private LocalDateTime uploadedAt;
 
