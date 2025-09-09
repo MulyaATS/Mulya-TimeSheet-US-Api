@@ -58,6 +58,7 @@ public class TimesheetService {
 
     private static final Logger logger = LoggerFactory.getLogger(TimesheetService.class);
 
+
     @Transactional
     public Timesheet createTimesheet(String userId, TimesheetRequest req) {
         Map<String, String> errors = new HashMap<>();
@@ -67,27 +68,22 @@ public class TimesheetService {
             throw new ValidationException(errors);
         }
 
-        // Fetch employee working type from Placements service
         String employeeWorkingType;
         try {
             employeeWorkingType = fetchEmployeeWorkingTypeFromPlacements(userId);
         } catch (Exception e) {
-            // fallback to WEEKLY for safety
             employeeWorkingType = "WEEKLY";
             logger.warn("Could not fetch employee working type for userId {}: {}", userId, e.getMessage());
         }
 
         TimesheetType timesheetType = TimesheetType.valueOf(employeeWorkingType.toUpperCase());
-
         String employeeType = employeeWorkingType.equals("DAILY") ? "INTERNAL" : "EXTERNAL";
 
-        // Validation only for weekly employees on submitted date (UI handles monthly date validation)
         if ("INTERNAL".equalsIgnoreCase(employeeType) && !employeeWorkingType.equalsIgnoreCase("DAILY")) {
             errors.put("timesheetType", "Internal employees must submit DAILY timesheets");
         }
 
         if ("EXTERNAL".equalsIgnoreCase(employeeType) && employeeWorkingType.equalsIgnoreCase("WEEKLY")) {
-            // Validate weekly timesheet date start is Monday (or partial first week)
             LocalDate submitDate = req.getDate();
             if (submitDate.getDayOfWeek() != DayOfWeek.MONDAY) {
                 LocalDate monthStart = submitDate.withDayOfMonth(1);
@@ -102,9 +98,8 @@ public class TimesheetService {
         String note = req.getNotes();
         LocalDate submitDate = req.getDate();
 
-        // Calculate weekStartDate as Monday of submitDate's week (timesheets saved weekly)
         LocalDate weekStart = submitDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        LocalDate weekEnd = weekStart.plusDays(4); // Friday
+        LocalDate weekEnd = weekStart.plusDays(4);
 
         Timesheet ts = timesheetRepository.findByUserIdAndWeekStartDate(userId, weekStart)
                 .orElseGet(() -> {
@@ -121,18 +116,17 @@ public class TimesheetService {
                     t.setPercentageOfTarget(0.0);
                     t.setNotes(note);
                     t.setTimesheetId(generateNextTimesheetId());
+                    logger.info("[Creation] New timesheet for week {} - {}", weekStart, weekEnd);
                     return t;
                 });
 
         List<TimesheetEntry> currentWorkingHours;
         List<TimesheetEntry> currentNonWorkingHours;
-
         try {
             currentWorkingHours = mapper.readValue(ts.getWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
         } catch (Exception e) {
             currentWorkingHours = new ArrayList<>();
         }
-
         try {
             currentNonWorkingHours = mapper.readValue(ts.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
         } catch (Exception e) {
@@ -142,21 +136,22 @@ public class TimesheetService {
         List<TimesheetEntry> newWorkingEntries = req.getWorkingEntries();
         List<TimesheetEntry> newNonWorkingEntries = req.getNonWorkingEntries();
 
-        // Duplicate date check only within this timesheet week range
-        Set<LocalDate> existingWorkingDates = currentWorkingHours.stream()
-                .map(TimesheetEntry::getDate)
-                .collect(Collectors.toSet());
-
         for (TimesheetEntry newEntry : newWorkingEntries) {
             if (newEntry.getDate().isBefore(ts.getWeekStartDate()) || newEntry.getDate().isAfter(ts.getWeekEndDate())) {
                 throw new IllegalArgumentException("Entry date " + newEntry.getDate() + " is outside the current timesheet's week range.");
             }
-            if (existingWorkingDates.contains(newEntry.getDate())) {
-                throw new IllegalArgumentException("Duplicate working hour entry for date: " + newEntry.getDate());
-            }
         }
 
+        Set<LocalDate> newWorkingDates = newWorkingEntries.stream()
+                .map(TimesheetEntry::getDate)
+                .collect(Collectors.toSet());
+        currentWorkingHours.removeIf(entry -> newWorkingDates.contains(entry.getDate()));
         currentWorkingHours.addAll(newWorkingEntries);
+
+        Set<LocalDate> newNonWorkingDates = newNonWorkingEntries.stream()
+                .map(TimesheetEntry::getDate)
+                .collect(Collectors.toSet());
+        currentNonWorkingHours.removeIf(entry -> newNonWorkingDates.contains(entry.getDate()));
         currentNonWorkingHours.addAll(newNonWorkingEntries);
 
         try {
@@ -166,40 +161,111 @@ public class TimesheetService {
             throw new RuntimeException("Error serializing working/non-working hours JSON", e);
         }
 
-        long workingDaysCount = weekStart.datesUntil(weekEnd.plusDays(1))
-                .filter(d -> d.getDayOfWeek() != DayOfWeek.SATURDAY && d.getDayOfWeek() != DayOfWeek.SUNDAY)
-                .count();
-
-        double targetHours = workingDaysCount * 8.0;
-
-        double totalWorkingHours = currentWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
-        ts.setPercentageOfTarget((totalWorkingHours / targetHours) * 100);
-
-        double totalLeaveHoursAdded = newNonWorkingEntries.stream()
-                .mapToDouble(TimesheetEntry::getHours)
-                .sum();
-
-        int leaveDaysTaken = (int) Math.ceil(totalLeaveHoursAdded / 8.0);
-
-        if (leaveDaysTaken > 0) {
+        String employeeEmail = userRegisterClient.getUserEmail(userId);
+        String fullEmployeeType = "Unknown";
+        if (employeeEmail != null && !employeeEmail.isBlank()) {
             try {
-                String employeeName = null;
-                List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(userId);
-                if (userInfos != null && !userInfos.isEmpty()) {
-                    employeeName = userInfos.get(0).getUserName();
+                List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(employeeEmail);
+                if (placements != null && !placements.isEmpty()) {
+                    fullEmployeeType = placements.get(0).getEmployeeType();
                 }
-                if (employeeName == null || employeeName.isBlank()) {
-                    employeeName = "";
-                }
-                leaveService.updateLeaveOnLeaveTaken(userId, leaveDaysTaken, employeeName);
-                logger.info("Updated leave taken for userId {} by {} days", userId, leaveDaysTaken);
-            } catch (Exception e) {
-                logger.error("Failed to update leave taken for userId {}: {}", userId, e.getMessage(), e);
+            } catch (Exception ex) {
+                logger.warn("Could not fetch placement data for email {}: {}", employeeEmail, ex.getMessage());
             }
         }
 
+        boolean isFullTime = "Full-time".equalsIgnoreCase(fullEmployeeType);
+
+        EmployeeLeaveSummary leaveSummary = employeeLeaveSummaryRepository.findByUserId(userId).orElse(null);
+        if (leaveSummary != null) {
+            logger.info("[LeaveSummary Before] availableLeaves={}, takenLeaves={}, leaveBalance={}",
+                    leaveSummary.getAvailableLeaves(), leaveSummary.getTakenLeaves());
+        }
+
+        int availableLeaves = leaveSummary != null ? leaveSummary.getAvailableLeaves() : 0;
+
+        int submitMonth = submitDate.getMonthValue();
+        long workingDaysCount = 0;
+        LocalDate d = weekStart;
+        while (!d.isAfter(weekEnd)) {
+            if (d.getMonthValue() == submitMonth) {
+                DayOfWeek day = d.getDayOfWeek();
+                if (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY) {
+                    workingDaysCount++;
+                }
+            }
+            d = d.plusDays(1);
+        }
+        double targetHours = workingDaysCount * 8.0;
+
+        // Old NonWorking hours (before this update)
+        Timesheet oldTs = timesheetRepository.findByUserIdAndWeekStartDate(userId, weekStart).orElse(null);
+        List<TimesheetEntry> oldNonWorkingEntries = new ArrayList<>();
+        if (oldTs != null && oldTs.getNonWorkingHours() != null) {
+            try {
+                oldNonWorkingEntries = mapper.readValue(oldTs.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
+            } catch (Exception e) {
+                oldNonWorkingEntries = new ArrayList<>();
+            }
+        }
+        double prevNonWorkingHoursInMonth = oldNonWorkingEntries.stream()
+                .filter(e -> e.getDate().getMonthValue() == submitMonth)
+                .mapToDouble(TimesheetEntry::getHours)
+                .sum();
+        int prevLeaveDaysCounted = (int)Math.ceil(prevNonWorkingHoursInMonth / 8.0);
+
+        // New NonWorking hours (after update)
+        double totalNonWorkingHoursInMonth = currentNonWorkingHours.stream()
+                .filter(e -> e.getDate().getMonthValue() == submitMonth)
+                .mapToDouble(TimesheetEntry::getHours)
+                .sum();
+        int newLeaveDaysCounted = (int)Math.ceil(totalNonWorkingHoursInMonth / 8.0);
+
+        int netNewLeaveDays = newLeaveDaysCounted - prevLeaveDaysCounted;
+
+        logger.info("[Leave Calculation] prevNonWorkingHours={} prevLeaveDaysCounted={} totalNonWorkingHours={} newLeaveDaysCounted={} netNewLeaveDays={} availableLeaves={}",
+                prevNonWorkingHoursInMonth, prevLeaveDaysCounted, totalNonWorkingHoursInMonth, newLeaveDaysCounted, netNewLeaveDays, availableLeaves);
+
+        double totalWorkingHoursInMonth = currentWorkingHours.stream()
+                .filter(e -> e.getDate().getMonthValue() == submitMonth)
+                .mapToDouble(TimesheetEntry::getHours)
+                .sum();
+
+        double effectiveWorkingHours = totalWorkingHoursInMonth + (isFullTime ? (newLeaveDaysCounted * 8.0) : 0.0);
+        ts.setPercentageOfTarget(targetHours == 0 ? 0 : (effectiveWorkingHours / targetHours) * 100);
+
+        if (isFullTime && netNewLeaveDays > 0 && leaveSummary != null) {
+            int availableLeavesCurrent = leaveSummary.getAvailableLeaves() != null ? leaveSummary.getAvailableLeaves() : 0;
+            if (availableLeavesCurrent >= netNewLeaveDays) {
+                // Proceed with leave deduction
+                try {
+                    String employeeName = "";
+                    List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(userId);
+                    if (userInfos != null && !userInfos.isEmpty()) {
+                        employeeName = userInfos.get(0).getUserName();
+                    }
+                    logger.info("[Leave Usage] Deducting {} new leave(s) for userId {}", netNewLeaveDays, userId);
+
+                    leaveService.updateLeaveOnLeaveTaken(userId, netNewLeaveDays, employeeName);
+
+                    leaveSummary.setAvailableLeaves(availableLeavesCurrent - netNewLeaveDays);
+                    employeeLeaveSummaryRepository.save(leaveSummary);
+                    logger.info("[LeaveSummary After Deduction] availableLeaves={}, takenLeaves={}, leaveBalance={}",
+                            leaveSummary.getAvailableLeaves(), leaveSummary.getTakenLeaves(), leaveSummary);
+                } catch (Exception e) {
+                    logger.error("Failed to update leave taken for userId {}: {}", userId, e.getMessage(), e);
+                }
+            } else {
+                logger.warn("Insufficient available leaves for userId {}: requested {}, available {}",
+                        userId, netNewLeaveDays, availableLeavesCurrent);
+            }
+        }
+        logger.info("[Timesheet Save] PercentageOfTarget={} EffectiveWorkingHours={} TargetHours={}",
+                ts.getPercentageOfTarget(), effectiveWorkingHours, targetHours);
+
         return timesheetRepository.save(ts);
     }
+
 
     private String fetchEmployeeWorkingTypeFromPlacements(String userId) throws Exception {
         // 1. Get employee email by userID
@@ -730,9 +796,30 @@ public class TimesheetService {
         ts.setWorkingHours(mapper.writeValueAsString(currentWorkingEntries));
         ts.setNonWorkingHours(mapper.writeValueAsString(currentNonWorkingEntries));
 
-        // Calculate total working hours only
+        // === Updated target percentage calculation here ===
         double totalWorkingHours = currentWorkingEntries.stream().mapToDouble(TimesheetEntry::getHours).sum();
-        double target = ts.getTimesheetType() == TimesheetType.DAILY ? 8.0 : 40.0;
+
+        double target;
+
+        if (ts.getTimesheetType() == TimesheetType.DAILY) {
+            target = 8.0;
+        } else {
+            // For weekly timesheets, calculate target as full working hours of full week (Mon-Fri)
+            LocalDate weekStart = ts.getWeekStartDate();
+            LocalDate weekEnd = ts.getWeekEndDate();
+
+            long workingDaysCount = 0;
+            LocalDate d = weekStart;
+            while (!d.isAfter(weekEnd)) {
+                DayOfWeek day = d.getDayOfWeek();
+                if (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY) {
+                    workingDaysCount++;
+                }
+                d = d.plusDays(1);
+            }
+            target = workingDaysCount * 8.0;
+        }
+
         ts.setPercentageOfTarget((totalWorkingHours / target) * 100);
 
         return timesheetRepository.save(ts);
@@ -911,7 +998,6 @@ public class TimesheetService {
 
             int availableLeaves = leaveSummary != null ? leaveSummary.getAvailableLeaves() : 0;
             int takenLeaves = leaveSummary != null ? leaveSummary.getTakenLeaves() : 0;
-            int leaveBalance = leaveSummary != null ? leaveSummary.getLeaveBalance() : 0;
 
             // Adjust working hours for full-time paid leave hours included
             if (availableLeaves >= 0 && "Full-time".equalsIgnoreCase(employeeType)) {
@@ -942,7 +1028,6 @@ public class TimesheetService {
 
             dto.setAvailableLeaves(availableLeaves);
             dto.setTakenLeaves(takenLeaves);
-            dto.setLeaveBalance(leaveBalance);
 
             summaries.add(dto);
         }
