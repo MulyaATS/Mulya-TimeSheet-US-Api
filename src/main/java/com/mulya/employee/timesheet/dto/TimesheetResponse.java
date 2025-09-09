@@ -24,8 +24,6 @@ public class TimesheetResponse {
     private List<AttachmentDto> attachments;
     private String notes;
     private String approver;
-
-
     public String getNotes() {
         return notes;
     }
@@ -35,7 +33,6 @@ public class TimesheetResponse {
         }
         this.notes = notes;
     }
-
     private LocalDate startDate;
     private String clientName;
 
@@ -107,5 +104,6 @@ public class TimesheetResponse {
 
     public List<AttachmentDto> getAttachments() { return attachments; }
     public void setAttachments(List<AttachmentDto> attachments) { this.attachments = attachments; }
+
 
 }

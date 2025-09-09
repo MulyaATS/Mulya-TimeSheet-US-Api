@@ -15,6 +15,7 @@ import com.mulya.employee.timesheet.repository.AttachmentRepository;
 import com.mulya.employee.timesheet.repository.EmployeeLeaveSummaryRepository;
 import com.mulya.employee.timesheet.repository.TimesheetRepository;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.time.*;
+import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -97,10 +99,10 @@ public class TimesheetService {
 
         String note = req.getNotes();
         LocalDate submitDate = req.getDate();
-
         LocalDate weekStart = submitDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         LocalDate weekEnd = weekStart.plusDays(4);
 
+        // Find or create a single timesheet for the full week
         Timesheet ts = timesheetRepository.findByUserIdAndWeekStartDate(userId, weekStart)
                 .orElseGet(() -> {
                     Timesheet t = new Timesheet();
@@ -120,6 +122,7 @@ public class TimesheetService {
                     return t;
                 });
 
+        // Deserialize existing entries
         List<TimesheetEntry> currentWorkingHours;
         List<TimesheetEntry> currentNonWorkingHours;
         try {
@@ -133,27 +136,33 @@ public class TimesheetService {
             currentNonWorkingHours = new ArrayList<>();
         }
 
-        List<TimesheetEntry> newWorkingEntries = req.getWorkingEntries();
-        List<TimesheetEntry> newNonWorkingEntries = req.getNonWorkingEntries();
-
-        for (TimesheetEntry newEntry : newWorkingEntries) {
-            if (newEntry.getDate().isBefore(ts.getWeekStartDate()) || newEntry.getDate().isAfter(ts.getWeekEndDate())) {
+        // Validate new entries are within week range
+        for (TimesheetEntry newEntry : req.getWorkingEntries()) {
+            if (newEntry.getDate().isBefore(weekStart) || newEntry.getDate().isAfter(weekEnd)) {
+                throw new IllegalArgumentException("Entry date " + newEntry.getDate() + " is outside the current timesheet's week range.");
+            }
+        }
+        for (TimesheetEntry newEntry : req.getNonWorkingEntries()) {
+            if (newEntry.getDate().isBefore(weekStart) || newEntry.getDate().isAfter(weekEnd)) {
                 throw new IllegalArgumentException("Entry date " + newEntry.getDate() + " is outside the current timesheet's week range.");
             }
         }
 
-        Set<LocalDate> newWorkingDates = newWorkingEntries.stream()
+        // Merge new working entries with existing, replacing by date
+        Set<LocalDate> newWorkingDates = req.getWorkingEntries().stream()
                 .map(TimesheetEntry::getDate)
                 .collect(Collectors.toSet());
         currentWorkingHours.removeIf(entry -> newWorkingDates.contains(entry.getDate()));
-        currentWorkingHours.addAll(newWorkingEntries);
+        currentWorkingHours.addAll(req.getWorkingEntries());
 
-        Set<LocalDate> newNonWorkingDates = newNonWorkingEntries.stream()
+        // Merge new non-working entries similarly
+        Set<LocalDate> newNonWorkingDates = req.getNonWorkingEntries().stream()
                 .map(TimesheetEntry::getDate)
                 .collect(Collectors.toSet());
         currentNonWorkingHours.removeIf(entry -> newNonWorkingDates.contains(entry.getDate()));
-        currentNonWorkingHours.addAll(newNonWorkingEntries);
+        currentNonWorkingHours.addAll(req.getNonWorkingEntries());
 
+        // Serialize lists back to JSON
         try {
             ts.setWorkingHours(mapper.writeValueAsString(currentWorkingHours));
             ts.setNonWorkingHours(mapper.writeValueAsString(currentNonWorkingHours));
@@ -161,6 +170,19 @@ public class TimesheetService {
             throw new RuntimeException("Error serializing working/non-working hours JSON", e);
         }
 
+        // Calculate workdays (weekdays) count for the whole week
+        int workingDaysCount = 0;
+        LocalDate cursor = weekStart;
+        while (!cursor.isAfter(weekEnd)) {
+            DayOfWeek day = cursor.getDayOfWeek();
+            if (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY) {
+                workingDaysCount++;
+            }
+            cursor = cursor.plusDays(1);
+        }
+        double targetHours = workingDaysCount * 8.0;
+
+        // Get employee full-time status for leave inclusion
         String employeeEmail = userRegisterClient.getUserEmail(userId);
         String fullEmployeeType = "Unknown";
         if (employeeEmail != null && !employeeEmail.isBlank()) {
@@ -173,98 +195,42 @@ public class TimesheetService {
                 logger.warn("Could not fetch placement data for email {}: {}", employeeEmail, ex.getMessage());
             }
         }
-
         boolean isFullTime = "Full-time".equalsIgnoreCase(fullEmployeeType);
 
-        EmployeeLeaveSummary leaveSummary = employeeLeaveSummaryRepository.findByUserId(userId).orElse(null);
-        if (leaveSummary != null) {
-            logger.info("[LeaveSummary Before] availableLeaves={}, takenLeaves={}, leaveBalance={}",
-                    leaveSummary.getAvailableLeaves(), leaveSummary.getTakenLeaves());
-        }
-
-        int availableLeaves = leaveSummary != null ? leaveSummary.getAvailableLeaves() : 0;
-
-        int submitMonth = submitDate.getMonthValue();
-        long workingDaysCount = 0;
-        LocalDate d = weekStart;
-        while (!d.isAfter(weekEnd)) {
-            if (d.getMonthValue() == submitMonth) {
-                DayOfWeek day = d.getDayOfWeek();
-                if (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY) {
-                    workingDaysCount++;
-                }
-            }
-            d = d.plusDays(1);
-        }
-        double targetHours = workingDaysCount * 8.0;
-
-        // Old NonWorking hours (before this update)
-        Timesheet oldTs = timesheetRepository.findByUserIdAndWeekStartDate(userId, weekStart).orElse(null);
-        List<TimesheetEntry> oldNonWorkingEntries = new ArrayList<>();
-        if (oldTs != null && oldTs.getNonWorkingHours() != null) {
-            try {
-                oldNonWorkingEntries = mapper.readValue(oldTs.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
-            } catch (Exception e) {
-                oldNonWorkingEntries = new ArrayList<>();
-            }
-        }
-        double prevNonWorkingHoursInMonth = oldNonWorkingEntries.stream()
-                .filter(e -> e.getDate().getMonthValue() == submitMonth)
-                .mapToDouble(TimesheetEntry::getHours)
-                .sum();
-        int prevLeaveDaysCounted = (int)Math.ceil(prevNonWorkingHoursInMonth / 8.0);
-
-        // New NonWorking hours (after update)
-        double totalNonWorkingHoursInMonth = currentNonWorkingHours.stream()
-                .filter(e -> e.getDate().getMonthValue() == submitMonth)
-                .mapToDouble(TimesheetEntry::getHours)
-                .sum();
-        int newLeaveDaysCounted = (int)Math.ceil(totalNonWorkingHoursInMonth / 8.0);
-
-        int netNewLeaveDays = newLeaveDaysCounted - prevLeaveDaysCounted;
-
-        logger.info("[Leave Calculation] prevNonWorkingHours={} prevLeaveDaysCounted={} totalNonWorkingHours={} newLeaveDaysCounted={} netNewLeaveDays={} availableLeaves={}",
-                prevNonWorkingHoursInMonth, prevLeaveDaysCounted, totalNonWorkingHoursInMonth, newLeaveDaysCounted, netNewLeaveDays, availableLeaves);
-
-        double totalWorkingHoursInMonth = currentWorkingHours.stream()
-                .filter(e -> e.getDate().getMonthValue() == submitMonth)
+        // Calculate effective hours including leave hours if full time
+        double totalWorkingHoursInSegment = currentWorkingHours.stream()
                 .mapToDouble(TimesheetEntry::getHours)
                 .sum();
 
-        double effectiveWorkingHours = totalWorkingHoursInMonth + (isFullTime ? (newLeaveDaysCounted * 8.0) : 0.0);
-        ts.setPercentageOfTarget(targetHours == 0 ? 0 : (effectiveWorkingHours / targetHours) * 100);
+        double totalNonWorkingHoursInSegment = currentNonWorkingHours.stream()
+                .mapToDouble(TimesheetEntry::getHours)
+                .sum();
 
-        if (isFullTime && netNewLeaveDays > 0 && leaveSummary != null) {
-            int availableLeavesCurrent = leaveSummary.getAvailableLeaves() != null ? leaveSummary.getAvailableLeaves() : 0;
-            if (availableLeavesCurrent >= netNewLeaveDays) {
-                // Proceed with leave deduction
-                try {
-                    String employeeName = "";
-                    List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(userId);
-                    if (userInfos != null && !userInfos.isEmpty()) {
-                        employeeName = userInfos.get(0).getUserName();
-                    }
-                    logger.info("[Leave Usage] Deducting {} new leave(s) for userId {}", netNewLeaveDays, userId);
+        double effectiveWorkingHours = totalWorkingHoursInSegment + (isFullTime ? totalNonWorkingHoursInSegment : 0.0);
 
-                    leaveService.updateLeaveOnLeaveTaken(userId, netNewLeaveDays, employeeName);
+        double percentageOfTarget = targetHours == 0 ? 0 : (effectiveWorkingHours / targetHours) * 100;
+        ts.setPercentageOfTarget(percentageOfTarget);
 
-                    leaveSummary.setAvailableLeaves(availableLeavesCurrent - netNewLeaveDays);
-                    employeeLeaveSummaryRepository.save(leaveSummary);
-                    logger.info("[LeaveSummary After Deduction] availableLeaves={}, takenLeaves={}, leaveBalance={}",
-                            leaveSummary.getAvailableLeaves(), leaveSummary.getTakenLeaves(), leaveSummary);
-                } catch (Exception e) {
-                    logger.error("Failed to update leave taken for userId {}: {}", userId, e.getMessage(), e);
-                }
-            } else {
-                logger.warn("Insufficient available leaves for userId {}: requested {}, available {}",
-                        userId, netNewLeaveDays, availableLeavesCurrent);
-            }
-        }
-        logger.info("[Timesheet Save] PercentageOfTarget={} EffectiveWorkingHours={} TargetHours={}",
-                ts.getPercentageOfTarget(), effectiveWorkingHours, targetHours);
+        // TODO: Optionally handle leave summary update here if needed
 
         return timesheetRepository.save(ts);
     }
+
+
+    // Utility to split weeks by month boundaries dynamically
+    private List<Pair<LocalDate, LocalDate>> splitWeekByMonth(LocalDate start, LocalDate end) {
+        List<Pair<LocalDate, LocalDate>> result = new ArrayList<>();
+        LocalDate tempStart = start;
+        while (!tempStart.isAfter(end)) {
+            YearMonth ym = YearMonth.from(tempStart);
+            LocalDate monthEnd = ym.atEndOfMonth();
+            LocalDate segmentEnd = monthEnd.isBefore(end) ? monthEnd : end;
+            result.add(Pair.of(tempStart, segmentEnd));
+            tempStart = segmentEnd.plusDays(1);
+        }
+        return result;
+    }
+
 
 
     private String fetchEmployeeWorkingTypeFromPlacements(String userId) throws Exception {
@@ -594,38 +560,44 @@ public class TimesheetService {
         List<Timesheet> timesheets = timesheetRepository.findTimesheetsOverlappingMonth(userId, monthStart, monthEnd);
 
         final double[] totalMonthlyWorkingHours = {0.0};
-        List<TimesheetResponse> dtos = timesheets.stream().map(ts -> {
-            TimesheetResponse resp = mapToResponse(ts);
+        List<TimesheetResponse> dtos = timesheets.stream()
+                .map(ts -> mapToResponse(ts, monthStart, monthEnd))
+                .map(resp -> {
+                    // Filter working entries by month
+                    resp.setWorkingEntries(resp.getWorkingEntries().stream()
+                            .filter(e -> {
+                                LocalDate d = LocalDate.parse(e.getDate().toString());
+                                return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
+                            }).collect(Collectors.toList()));
 
-            resp.setWorkingEntries(resp.getWorkingEntries().stream()
-                    .filter(e -> {
-                        LocalDate d = LocalDate.parse(e.getDate().toString());
-                        return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
-                    }).collect(Collectors.toList()));
+                    // Filter non-working entries by month
+                    resp.setNonWorkingEntries(resp.getNonWorkingEntries().stream()
+                            .filter(e -> {
+                                LocalDate d = LocalDate.parse(e.getDate().toString());
+                                return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
+                            }).collect(Collectors.toList()));
 
-            resp.setNonWorkingEntries(resp.getNonWorkingEntries().stream()
-                    .filter(e -> {
-                        LocalDate d = LocalDate.parse(e.getDate().toString());
-                        return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
-                    }).collect(Collectors.toList()));
+                    try {
+                        double sumThisSheet = resp.getWorkingEntries().stream()
+                                .mapToDouble(TimesheetEntry::getHours)
+                                .sum();
+                        totalMonthlyWorkingHours[0] += sumThisSheet;
+                    } catch (Exception ex) {
+                        ex.printStackTrace();
+                    }
 
-            try {
-                double sumThisSheet = resp.getWorkingEntries().stream()
-                        .mapToDouble(TimesheetEntry::getHours)
-                        .sum();
-                totalMonthlyWorkingHours[0] += sumThisSheet;
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
-
-            return resp;
-        }).collect(Collectors.toList());
+                    return resp;
+                }).collect(Collectors.toList());
 
         MonthlyTimesheetResponse response = new MonthlyTimesheetResponse();
         response.setTimesheets(dtos);
         response.setTotalWorkingHours(totalMonthlyWorkingHours[0]);
+        response.setMonthStartDate(monthStart);
+        response.setMonthEndDate(monthEnd);
         return response;
     }
+
+
 
     public List<TimesheetResponse> getAllTimesheetsByUserId(String userId) {
         List<Timesheet> timesheets = timesheetRepository.findByUserId(userId);
@@ -633,6 +605,65 @@ public class TimesheetService {
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
+
+    public double calculateProportionalTargetForMonth(
+            Timesheet ts,
+            LocalDate monthStart,
+            LocalDate monthEnd,
+            boolean isFullTime) {
+
+        LocalDate weekStart = ts.getWeekStartDate();
+        LocalDate weekEnd = ts.getWeekEndDate();
+
+        // Calculate overlap between timesheet week and requested month
+        LocalDate overlapStart = weekStart.isBefore(monthStart) ? monthStart : weekStart;
+        LocalDate overlapEnd = weekEnd.isAfter(monthEnd) ? monthEnd : weekEnd;
+
+        if (overlapEnd.isBefore(overlapStart)) {
+            return 0.0;
+        }
+
+        // Count workdays (Mon-Fri) in overlap
+        int workdays = 0;
+        for (LocalDate d = overlapStart; !d.isAfter(overlapEnd); d = d.plusDays(1)) {
+            DayOfWeek dow = d.getDayOfWeek();
+            if (dow != DayOfWeek.SATURDAY && dow != DayOfWeek.SUNDAY) {
+                workdays++;
+            }
+        }
+
+        double targetHours = workdays * 8.0;
+
+        List<TimesheetEntry> workingEntries;
+        List<TimesheetEntry> nonWorkingEntries;
+        try {
+            workingEntries = mapper.readValue(ts.getWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
+            nonWorkingEntries = mapper.readValue(ts.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 0.0;
+        }
+
+        // Filter entries in the overlap period
+        List<TimesheetEntry> filteredWorking = workingEntries.stream()
+                .filter(e -> !e.getDate().isBefore(overlapStart) && !e.getDate().isAfter(overlapEnd))
+                .collect(Collectors.toList());
+
+        List<TimesheetEntry> filteredNonWorking = nonWorkingEntries.stream()
+                .filter(e -> !e.getDate().isBefore(overlapStart) && !e.getDate().isAfter(overlapEnd))
+                .collect(Collectors.toList());
+
+        double totalWorkingHours = filteredWorking.stream().mapToDouble(TimesheetEntry::getHours).sum();
+        double totalLeaveHours = filteredNonWorking.stream().mapToDouble(TimesheetEntry::getHours).sum();
+
+        double effectiveHours = totalWorkingHours + (isFullTime ? totalLeaveHours : 0);
+
+        if (targetHours == 0) return 0.0;
+
+        return (effectiveHours / targetHours) * 100.0;
+    }
+
+
 
 
     public List<TimesheetResponse> getAllTimesheets() {
@@ -648,7 +679,7 @@ public class TimesheetService {
         List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(ts.getUserId());
         String employeeName = userInfos.isEmpty() ? "Unknown" : userInfos.get(0).getUserName();
         String employeeEmail = userRegisterClient.getUserEmail(ts.getUserId());
-        UserDto approvalName = userRegisterClient.getUserNameByRole( "ACCOUNTS");
+        UserDto approvalName = userRegisterClient.getUserNameByRole("ACCOUNTS");
         System.out.println("Employee Name: " + employeeName);
         System.out.println("Employee Email: " + employeeEmail);
 
@@ -671,7 +702,6 @@ public class TimesheetService {
                     resp.setClientName(placement.getClientName());
                     resp.setEmployeeRoleType(placement.getEmployeeType());
                     System.out.println("Timesheet employeeType (from entity): " + placement.getEmployeeType());
-
                 } else {
                     resp.setTimesheetType(TimesheetType.WEEKLY); // fallback default
                 }
@@ -733,6 +763,175 @@ public class TimesheetService {
         }
 
         return resp;
+    }
+
+    private TimesheetResponse mapToResponse(Timesheet ts, LocalDate monthStart, LocalDate monthEnd) {
+        System.out.println("Mapping Timesheet ID: " + ts.getTimesheetId() + ", User ID: " + ts.getUserId());
+
+        List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(ts.getUserId());
+        String employeeName = userInfos.isEmpty() ? "Unknown" : userInfos.get(0).getUserName();
+        String employeeEmail = userRegisterClient.getUserEmail(ts.getUserId());
+        UserDto approvalName = userRegisterClient.getUserNameByRole("ACCOUNTS");
+        System.out.println("Employee Name: " + employeeName);
+        System.out.println("Employee Email: " + employeeEmail);
+
+        TimesheetResponse resp = new TimesheetResponse();
+        resp.setTimesheetId(ts.getTimesheetId());
+        resp.setUserId(ts.getUserId());
+        resp.setEmployeeName(employeeName);
+        resp.setEmployeeType(ts.getEmployeeType());
+
+        boolean isFullTime = false;
+        // Fetch timesheetType dynamically from placements and determine isFullTime
+        if (employeeEmail != null && !employeeEmail.isBlank()) {
+            try {
+                System.out.println("Calling CandidateClient with email: " + employeeEmail);
+                List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(employeeEmail);
+                System.out.println("Number of placements received: " + (placements == null ? 0 : placements.size()));
+                if (placements != null && !placements.isEmpty()) {
+                    PlacementDetailsDto placement = placements.get(0);
+                    resp.setTimesheetType(TimesheetType.valueOf(placement.getEmployeeWorkingType()));
+                    resp.setStartDate(placement.getStartDate());
+                    resp.setClientName(placement.getClientName());
+                    resp.setEmployeeRoleType(placement.getEmployeeType());
+                    System.out.println("Timesheet employeeType (from entity): " + placement.getEmployeeType());
+
+                    isFullTime = "Full-time".equalsIgnoreCase(placement.getEmployeeType());
+                } else {
+                    resp.setTimesheetType(TimesheetType.WEEKLY); // fallback default
+                }
+            } catch (Exception ex) {
+                System.err.println("Error fetching placement details for email: " + employeeEmail);
+                ex.printStackTrace();
+                resp.setTimesheetType(TimesheetType.WEEKLY);
+            }
+        } else {
+            resp.setTimesheetType(TimesheetType.WEEKLY);
+        }
+
+        resp.setTimesheetDate(ts.getTimesheetDate());
+        resp.setWeekStartDate(ts.getWeekStartDate());
+        resp.setWeekEndDate(ts.getWeekEndDate());
+
+        try {
+            resp.setWorkingEntries(mapper.readValue(
+                    ts.getWorkingHours(),
+                    new TypeReference<List<TimesheetEntry>>() {}
+            ));
+        } catch (Exception e) {
+            System.err.println("❌ Failed to parse 'workingHours' JSON for Timesheet ID: " + ts.getTimesheetId());
+            e.printStackTrace();
+            resp.setWorkingEntries(List.of());
+        }
+
+        try {
+            resp.setNonWorkingEntries(mapper.readValue(
+                    ts.getNonWorkingHours(),
+                    new TypeReference<List<TimesheetEntry>>() {}
+            ));
+        } catch (Exception e) {
+            System.err.println("❌ Failed to parse 'nonWorkingHours' JSON for Timesheet ID: " + ts.getTimesheetId());
+            e.printStackTrace();
+            resp.setNonWorkingEntries(List.of());
+        }
+
+        // Now calculate proportional target percentage adjusted for leaves with isFullTime flag
+        double proportionalTarget = calculateTargetPercentageAdjustedForLeaves(ts, monthStart, monthEnd, isFullTime);
+        resp.setPercentageOfTarget(proportionalTarget);
+
+        resp.setStatus(ts.getStatus());
+        resp.setApprover(approvalName == null ? "null" : approvalName.getUserName());
+        resp.setApprovedBy(ts.getApprovedBy());
+        resp.setApprovedAt(ts.getApprovedAt());
+        resp.setNotes(ts.getNotes());
+
+        if (ts.getAttachments() != null) {
+            List<AttachmentDto> filteredAttachments = ts.getAttachments()
+                    .stream()
+                    .filter(att -> !att.getAttachmentEndDate().isBefore(monthStart) &&
+                            !att.getAttachmentStartDate().isAfter(monthEnd))
+                    .map(att -> new AttachmentDto(
+                            att.getId(),
+                            att.getFilename(),
+                            att.getFiletype(),
+                            att.getUploadedAt()
+                    ))
+                    .collect(Collectors.toList());
+            resp.setAttachments(filteredAttachments);
+        } else {
+            resp.setAttachments(List.of());
+        }
+        return resp;
+    }
+
+    // Overloaded calculateTargetPercentageAdjustedForLeaves which accepts isFullTime flag
+    private double calculateTargetPercentageAdjustedForLeaves(
+            Timesheet ts,
+            LocalDate monthStart,
+            LocalDate monthEnd,
+            boolean isFullTime) {
+
+        LocalDate weekStart = ts.getWeekStartDate();
+        LocalDate weekEnd = ts.getWeekEndDate();
+
+        long totalDays = ChronoUnit.DAYS.between(weekStart, weekEnd) + 1;
+
+        LocalDate overlapStart = weekStart.isBefore(monthStart) ? monthStart : weekStart;
+        LocalDate overlapEnd = weekEnd.isAfter(monthEnd) ? monthEnd : weekEnd;
+        long overlapDays = ChronoUnit.DAYS.between(overlapStart, overlapEnd) + 1;
+
+        if (overlapDays <= 0) {
+            return 0.0;
+        }
+
+        List<TimesheetEntry> workingEntries = List.of();
+        List<TimesheetEntry> nonWorkingEntries = List.of();
+
+        try {
+            workingEntries = mapper.readValue(ts.getWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
+            nonWorkingEntries = mapper.readValue(ts.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
+        } catch (Exception e) {
+            System.err.println("Failed to parse entries for Timesheet ID: " + ts.getTimesheetId());
+            e.printStackTrace();
+        }
+
+        // Count leave days within overlapping period using nonWorking entries with hours == 8
+        long leaveDays = nonWorkingEntries.stream()
+                .filter(e -> {
+                    LocalDate entryDate = e.getDate();
+                    return !entryDate.isBefore(overlapStart)
+                            && !entryDate.isAfter(overlapEnd)
+                            && e.getHours() == 8.0;
+                })
+                .count();
+
+        long workingDays = overlapDays - leaveDays;
+        if (workingDays < 0) workingDays = 0;
+
+        // Sum working hours in overlapping period
+        double totalWorkingHours = workingEntries.stream()
+                .filter(e -> {
+                    LocalDate d = e.getDate();
+                    return !d.isBefore(overlapStart) && !d.isAfter(overlapEnd);
+                })
+                .mapToDouble(TimesheetEntry::getHours)
+                .sum();
+
+        // Sum leave hours if full time
+        double totalLeaveHours = 0;
+        if (isFullTime) {
+            totalLeaveHours = leaveDays * 8.0;
+        }
+
+        double targetHours = overlapDays * 8.0;
+        if (targetHours == 0) {
+            return 0.0;
+        }
+
+        double effectiveHours = totalWorkingHours + totalLeaveHours;
+        double percentage = (effectiveHours / targetHours) * 100.0;
+
+        return percentage;
     }
 
     @Transactional
@@ -848,38 +1047,55 @@ public class TimesheetService {
 
 
     @Transactional
-    public Timesheet uploadAttachments(String timesheetId, List<MultipartFile> files) throws IOException {
+    public Timesheet uploadAttachments(String timesheetId, List<MultipartFile> files,
+                                       LocalDate attachmentStartDate, LocalDate attachmentEndDate) throws IOException {
         Timesheet ts = timesheetRepository.findByTimesheetId(timesheetId)
                 .orElseThrow(() -> new ResourceNotFoundException("Timesheet not found with ID: " + timesheetId, ResourceNotFoundException.ResourceType.TIMESHEET));
-        boolean exists = !ts.getAttachments().isEmpty();
+
+        // Validate attachment dates within timesheet week
+        if (attachmentStartDate.isBefore(ts.getWeekStartDate()) || attachmentEndDate.isAfter(ts.getWeekEndDate())) {
+            throw new IllegalArgumentException("Attachment date range must be within the timesheet week");
+        }
+
+        // Optional: Check for overlapping attachments on same date range
+        boolean exists = ts.getAttachments().stream().anyMatch(a ->
+                !(a.getAttachmentEndDate().isBefore(attachmentStartDate) || a.getAttachmentStartDate().isAfter(attachmentEndDate))
+        );
+
         if (exists) {
-            throw new IllegalStateException(
-                    String.format("Attachment already exists for week %s to %s",
-                            ts.getWeekStartDate(), ts.getWeekEndDate())
-            );
+            throw new IllegalStateException(String.format("Attachment already exists for dates %s to %s",
+                    attachmentStartDate, attachmentEndDate));
         }
 
         for (MultipartFile file : files) {
+            String originalFilename = file.getOriginalFilename();
+            String extension = "";
+
+            if (originalFilename != null && originalFilename.contains(".")) {
+                extension = originalFilename.substring(originalFilename.lastIndexOf("."));
+            }
+
+            // Construct new filename in desired format
+            String newFilename = String.format("timesheet_%s_to_%s%s",
+                    attachmentStartDate.toString(),
+                    attachmentEndDate.toString(),
+                    extension);
+
             Attachment attachment = new Attachment();
             attachment.setTimesheet(ts);
-            attachment.setFilename(file.getOriginalFilename());
+            attachment.setFilename(newFilename);
             attachment.setFiletype(file.getContentType());
             attachment.setContent(file.getBytes());
             attachment.setWeekStartDate(ts.getWeekStartDate());
             attachment.setWeekEndDate(ts.getWeekEndDate());
+            attachment.setAttachmentStartDate(attachmentStartDate);
+            attachment.setAttachmentEndDate(attachmentEndDate);
             ts.getAttachments().add(attachment);
         }
 
         return timesheetRepository.save(ts);
     }
 
-
-    public void deleteTimesheet(Long id) {
-        if (!timesheetRepository.existsById(id)) {
-            throw new IllegalArgumentException("Timesheet not found");
-        }
-        timesheetRepository.deleteById(id);
-    }
 
     public List<EmployeeMonthlyTimesheetDto> getAllEmployeesMonthlySummary(LocalDate monthStart, LocalDate monthEnd) throws Exception {
         logger.info("Fetching timesheets from {} to {}", monthStart, monthEnd);

@@ -27,6 +27,12 @@ public class Attachment {
     @Column(name = "week_end_date")
     private LocalDate weekEndDate;
 
+    @Column(nullable = false)
+    private LocalDate attachmentStartDate;
+
+    @Column(nullable = false)
+    private LocalDate attachmentEndDate;
+
     @Lob
     @Column(name = "content", columnDefinition = "LONGBLOB")
     private byte[] content;
@@ -62,4 +68,21 @@ public class Attachment {
 
     public LocalDate getWeekEndDate() { return weekEndDate; }
     public void setWeekEndDate(LocalDate weekEndDate) { this.weekEndDate = weekEndDate; }
+
+    public LocalDate getAttachmentStartDate() {
+        return attachmentStartDate;
+    }
+
+    public void setAttachmentStartDate(LocalDate attachmentStartDate) {
+        this.attachmentStartDate = attachmentStartDate;
+    }
+
+    public LocalDate getAttachmentEndDate() {
+        return attachmentEndDate;
+    }
+
+    public void setAttachmentEndDate(LocalDate attachmentEndDate) {
+        this.attachmentEndDate = attachmentEndDate;
+    }
+
 }

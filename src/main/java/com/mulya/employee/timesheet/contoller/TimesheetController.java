@@ -228,20 +228,24 @@ public class TimesheetController {
     @PostMapping("/{timesheetId}/attachments")
     public ResponseEntity<ApiResponse<List<AttachmentUploadResponse>>> uploadTimesheetAttachments(
             @PathVariable String timesheetId,
-            @RequestParam("files") List<MultipartFile> files) throws IOException {
+            @RequestParam("files") List<MultipartFile> files,
+            @RequestParam("attachmentStartDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate attachmentStartDate,
+            @RequestParam("attachmentEndDate") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate attachmentEndDate
+    ) throws IOException {
 
-        Timesheet ts = timesheetService.uploadAttachments(timesheetId, files);
+        Timesheet ts = timesheetService.uploadAttachments(timesheetId, files, attachmentStartDate, attachmentEndDate);
 
-        // You probably have a User service — fetching employee name
         String employeeName = userRegisterClient.getUserInfos(ts.getUserId()).get(0).getUserName();
 
         List<AttachmentUploadResponse> responses = ts.getAttachments().stream()
+                .filter(att -> !att.getAttachmentEndDate().isBefore(attachmentStartDate) &&
+                        !att.getAttachmentStartDate().isAfter(attachmentEndDate))
                 .map(att -> new AttachmentUploadResponse(
                         att.getId(),
                         ts.getUserId(),
                         employeeName,
-                        ts.getWeekStartDate(),
-                        ts.getWeekEndDate()
+                        att.getAttachmentStartDate(),
+                        att.getAttachmentEndDate()
                 ))
                 .collect(Collectors.toList());
 
@@ -250,6 +254,7 @@ public class TimesheetController {
                 responses
         ));
     }
+
 
     // === LIST ATTACHMENTS ===
     @GetMapping("/{timesheetId}/attachments")
@@ -272,15 +277,21 @@ public class TimesheetController {
 
     // === DOWNLOAD ATTACHMENT ===
     @GetMapping("/attachments/{attachmentId}/download")
-    public ResponseEntity<?> downloadAttachment(@PathVariable Long attachmentId) {
+    public ResponseEntity<?> downloadAttachment(
+            @PathVariable Long attachmentId,
+            @RequestParam(name = "view", required = false, defaultValue = "false") boolean view) {
+
         Attachment att = attachmentRepository.findById(attachmentId)
                 .orElseThrow(() -> new IllegalArgumentException("Attachment not found"));
 
+        String disposition = view ? "inline" : "attachment";
+
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + att.getFilename() + "\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition + "; filename=\"" + att.getFilename() + "\"")
                 .contentType(MediaType.parseMediaType(att.getFiletype()))
                 .body(att.getContent());
     }
+
 
     @DeleteMapping("/delete-attachments/{attachmentId}")
     public ResponseEntity<ApiResponse<Void>> deleteAttachment(@PathVariable Long attachmentId) {
