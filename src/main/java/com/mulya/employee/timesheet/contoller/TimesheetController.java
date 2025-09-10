@@ -305,24 +305,24 @@ public class TimesheetController {
                 null
         ));
     }
-    @PatchMapping("/update-timesheet-entries/{id}")
+    @PatchMapping("/update-timesheet-entries/{timesheetId}")
     public ResponseEntity<ApiResponse<TimesheetSummaryDto>> updateTimesheetEntries(
-            @PathVariable Long id,
+            @PathVariable String timesheetId,
             @RequestParam String userId,
             @Valid @RequestBody TimesheetEntriesUpdateRequest updatedEntriesRequest) throws Exception {
 
-        Timesheet updated = timesheetService.updateTimesheetEntries(id, userId, updatedEntriesRequest.getWorkingEntries(),updatedEntriesRequest.getNonWorkingEntries());
+        Timesheet updated = timesheetService.updateTimesheetEntries(timesheetId, userId, updatedEntriesRequest.getWorkingEntries(),updatedEntriesRequest.getNonWorkingEntries());
         TimesheetSummaryDto summaryDto = timesheetService.toSummaryDto(updated);
         return ResponseEntity.ok(ApiResponse.success("Entries updated successfully", summaryDto));
     }
 
-    @PutMapping("/update-timesheet/{id}")
+    @PutMapping("/update-timesheet/{timesheetId}")
     public ResponseEntity<ApiResponse<TimesheetSummaryDto>> updateWeeklyTimesheet(
-            @PathVariable Long id,
+            @PathVariable String timesheetId,
             @RequestParam String userId,
             @Valid @RequestBody TimesheetRequest request) throws Exception {
 
-        Timesheet updated = timesheetService.updateTimesheet(id, userId, request);
+        Timesheet updated = timesheetService.updateTimesheet(timesheetId, userId, request);
         TimesheetSummaryDto summaryDto = timesheetService.toSummaryDto(updated);
         return ResponseEntity.ok(ApiResponse.success("Weekly timesheet updated successfully", summaryDto));
     }
