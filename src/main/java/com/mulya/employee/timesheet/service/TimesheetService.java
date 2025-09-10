@@ -102,7 +102,6 @@ public class TimesheetService {
         LocalDate weekStart = submitDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         LocalDate weekEnd = weekStart.plusDays(4);
 
-        // Find or create a single timesheet for the full week
         Timesheet ts = timesheetRepository.findByUserIdAndWeekStartDate(userId, weekStart)
                 .orElseGet(() -> {
                     Timesheet t = new Timesheet();
@@ -148,21 +147,29 @@ public class TimesheetService {
             }
         }
 
-        // Merge new working entries with existing, replacing by date
+        // REMOVE old leave entries (nonWorkingHours) for dates where a workingHours entry is being added
         Set<LocalDate> newWorkingDates = req.getWorkingEntries().stream()
                 .map(TimesheetEntry::getDate)
                 .collect(Collectors.toSet());
+
+        List<TimesheetEntry> cancelledLeaves = currentNonWorkingHours.stream()
+                .filter(e -> newWorkingDates.contains(e.getDate()) && e.getHours() == 8.0)
+                .collect(Collectors.toList());
+
+        currentNonWorkingHours.removeIf(entry -> newWorkingDates.contains(entry.getDate()));
+
+        // Remove replaced working entries for same date, merge new
         currentWorkingHours.removeIf(entry -> newWorkingDates.contains(entry.getDate()));
         currentWorkingHours.addAll(req.getWorkingEntries());
 
-        // Merge new non-working entries similarly
+        // Remove replaced non-working entries for same date, merge new
         Set<LocalDate> newNonWorkingDates = req.getNonWorkingEntries().stream()
                 .map(TimesheetEntry::getDate)
                 .collect(Collectors.toSet());
         currentNonWorkingHours.removeIf(entry -> newNonWorkingDates.contains(entry.getDate()));
         currentNonWorkingHours.addAll(req.getNonWorkingEntries());
 
-        // Serialize lists back to JSON
+        // Serialize back
         try {
             ts.setWorkingHours(mapper.writeValueAsString(currentWorkingHours));
             ts.setNonWorkingHours(mapper.writeValueAsString(currentNonWorkingHours));
@@ -170,12 +177,11 @@ public class TimesheetService {
             throw new RuntimeException("Error serializing working/non-working hours JSON", e);
         }
 
-        // Calculate workdays (weekdays) count for the whole week
+        // Calculate workdays count for the whole week
         int workingDaysCount = 0;
         LocalDate cursor = weekStart;
         while (!cursor.isAfter(weekEnd)) {
-            DayOfWeek day = cursor.getDayOfWeek();
-            if (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY) {
+            if (cursor.getDayOfWeek() != DayOfWeek.SATURDAY && cursor.getDayOfWeek() != DayOfWeek.SUNDAY) {
                 workingDaysCount++;
             }
             cursor = cursor.plusDays(1);
@@ -197,38 +203,27 @@ public class TimesheetService {
         }
         boolean isFullTime = "Full-time".equalsIgnoreCase(fullEmployeeType);
 
-        // Calculate effective hours including leave hours if full time
-        double totalWorkingHoursInSegment = currentWorkingHours.stream()
-                .mapToDouble(TimesheetEntry::getHours)
-                .sum();
+        double totalWorkingHours = currentWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
+        double totalNonWorkingHours = currentNonWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
 
-        double totalNonWorkingHoursInSegment = currentNonWorkingHours.stream()
-                .mapToDouble(TimesheetEntry::getHours)
-                .sum();
-
-        double effectiveWorkingHours = totalWorkingHoursInSegment + (isFullTime ? totalNonWorkingHoursInSegment : 0.0);
+        double effectiveWorkingHours = totalWorkingHours + (isFullTime ? totalNonWorkingHours : 0.0);
 
         double percentageOfTarget = targetHours == 0 ? 0 : (effectiveWorkingHours / targetHours) * 100;
         ts.setPercentageOfTarget(percentageOfTarget);
 
-        // TODO: Optionally handle leave summary update here if needed
+        // If any leave is cancelled (for full-time), refund that leave in leaveSummary
+        if (isFullTime && !cancelledLeaves.isEmpty()) {
+            EmployeeLeaveSummary leaveSummary = employeeLeaveSummaryRepository.findByUserId(userId).orElse(null);
+            if (leaveSummary != null) {
+                int refundCount = cancelledLeaves.size();
+                leaveSummary.setAvailableLeaves(leaveSummary.getAvailableLeaves() + refundCount);
+                leaveSummary.setTakenLeaves(Math.max(0, leaveSummary.getTakenLeaves() - refundCount));
+                employeeLeaveSummaryRepository.save(leaveSummary);
+                logger.info("[Leave Refund] Refunded {} leaves for userId {}", refundCount, userId);
+            }
+        }
 
         return timesheetRepository.save(ts);
-    }
-
-
-    // Utility to split weeks by month boundaries dynamically
-    private List<Pair<LocalDate, LocalDate>> splitWeekByMonth(LocalDate start, LocalDate end) {
-        List<Pair<LocalDate, LocalDate>> result = new ArrayList<>();
-        LocalDate tempStart = start;
-        while (!tempStart.isAfter(end)) {
-            YearMonth ym = YearMonth.from(tempStart);
-            LocalDate monthEnd = ym.atEndOfMonth();
-            LocalDate segmentEnd = monthEnd.isBefore(end) ? monthEnd : end;
-            result.add(Pair.of(tempStart, segmentEnd));
-            tempStart = segmentEnd.plusDays(1);
-        }
-        return result;
     }
 
 
@@ -935,8 +930,8 @@ public class TimesheetService {
     }
 
     @Transactional
-    public Timesheet updateTimesheet(Long id, String userId, TimesheetRequest req) throws Exception {
-        Timesheet ts = timesheetRepository.findById(id)
+    public Timesheet updateTimesheet(String timesheetId, String userId, TimesheetRequest req) throws Exception {
+        Timesheet ts = timesheetRepository.findByTimesheetId(timesheetId)
                 .orElseThrow(() -> new IllegalArgumentException("Timesheet not found"));
 
         if (!ts.getUserId().equals(userId)) {
@@ -962,10 +957,10 @@ public class TimesheetService {
     }
 
     @Transactional
-    public Timesheet updateTimesheetEntries(Long timesheetId, String userId,
+    public Timesheet updateTimesheetEntries(String timesheetId, String userId,
                                             List<TimesheetEntry> updatedWorkingEntries, List<TimesheetEntry> updatedNonWorkingEntries) throws Exception {
 
-        Timesheet ts = timesheetRepository.findById(timesheetId)
+        Timesheet ts = timesheetRepository.findByTimesheetId(timesheetId)
                 .orElseThrow(() -> new IllegalArgumentException("Timesheet not found"));
 
         if (!ts.getUserId().equals(userId)) {
