@@ -22,7 +22,6 @@ public class EmployeeMonthlyTimesheetDto {
     private int totalWorkingDays;
     private int availableLeaves;
     private int takenLeaves;
-    private int leaveBalance;
     private String Status;
 
     public String getStatus() {
@@ -148,14 +147,6 @@ public class EmployeeMonthlyTimesheetDto {
 
     public void setTakenLeaves(int takenLeaves) {
         this.takenLeaves = takenLeaves;
-    }
-
-    public int getLeaveBalance() {
-        return leaveBalance;
-    }
-
-    public void setLeaveBalance(int leaveBalance) {
-        this.leaveBalance = leaveBalance;
     }
 
     public LocalDate getJoiningDate() {
