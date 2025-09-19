@@ -301,7 +301,7 @@ public class TimesheetService {
                 .orElseThrow(() -> new IllegalArgumentException("No timesheet found for this week"));
         ts.setStatus("PENDING_APPROVAL");
 
-        UserDto managerDto = userRegisterClient.getUsersByRole("ACCOUNTS")
+        UserDto managerDto = userRegisterClient.getUsersByRole("ADMIN")
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("No ACCOUNTS manager"));
@@ -332,7 +332,7 @@ public class TimesheetService {
             throw new IllegalArgumentException("No timesheets found overlapping the month " + monthStartDate);
         }
 
-        UserDto managerDto = userRegisterClient.getUsersByRole("ACCOUNTS")
+        UserDto managerDto = userRegisterClient.getUsersByRole("ADMIN")
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("No ACCOUNTS manager"));
