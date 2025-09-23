@@ -311,7 +311,8 @@ public class TimesheetService {
 
         emailService.sendManagerApprovalRequestEmail(
                 ts,
-                managerDto.getEmail(),
+                //managerDto.getEmail(),
+                "ts.in@adroitinnovative.com",
                 managerInfo.getUserName(),
                 empInfo.getUserName()
         );
@@ -344,7 +345,8 @@ public class TimesheetService {
 
             emailService.sendManagerApprovalRequestEmail(
                     ts,
-                    managerDto.getEmail(),
+                   // managerDto.getEmail(),
+                    "ts.in@adroitinnovative.com",
                     managerInfo.getUserName(),
                     empInfo.getUserName()
             );
