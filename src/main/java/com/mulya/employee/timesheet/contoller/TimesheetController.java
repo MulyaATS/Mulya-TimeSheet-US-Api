@@ -64,10 +64,10 @@ public class TimesheetController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate weekStart) {
         Timesheet ts = timesheetService.submitWeekly(userId, weekStart);
 
-        UserDto managerDto = userRegisterClient.getUsersByRole("ACCOUNTS")
+        UserDto managerDto = userRegisterClient.getUsersByRole("ADMIN")
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("No ACCOUNTS manager"));
+                .orElseThrow(() -> new RuntimeException("No ADMIN manager"));
 
         TimesheetApprovalDto approvalDto = timesheetService.toApprovalDto(ts, managerDto.getUserId());
 
@@ -81,10 +81,10 @@ public class TimesheetController {
 
         List<Timesheet> updatedTimesheets = timesheetService.submitMonthly(userId, monthStartDate);
 
-        UserDto managerDto = userRegisterClient.getUsersByRole("ACCOUNTS")
+        UserDto managerDto = userRegisterClient.getUsersByRole("ADMIN")
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("No ACCOUNTS manager"));
+                .orElseThrow(() -> new RuntimeException("No ADMIN manager"));
 
         List<TimesheetApprovalDto> approvalDtos = updatedTimesheets.stream()
                 .map(ts -> timesheetService.toApprovalDto(ts, managerDto.getUserId()))

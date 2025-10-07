@@ -304,7 +304,7 @@ public class TimesheetService {
         UserDto managerDto = userRegisterClient.getUsersByRole("ADMIN")
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("No ACCOUNTS manager"));
+                .orElseThrow(() -> new RuntimeException("No ADMIN manager"));
 
         UserInfoDto managerInfo = userRegisterClient.getUserInfos(managerDto.getUserId()).get(0);
         UserInfoDto empInfo = userRegisterClient.getUserInfos(ts.getUserId()).get(0);
@@ -336,7 +336,7 @@ public class TimesheetService {
         UserDto managerDto = userRegisterClient.getUsersByRole("ADMIN")
                 .stream()
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("No ACCOUNTS manager"));
+                .orElseThrow(() -> new RuntimeException("No ADMIN manager"));
         UserInfoDto managerInfo = userRegisterClient.getUserInfos(managerDto.getUserId()).get(0);
 
         for (Timesheet ts : timesheets) {
@@ -500,7 +500,7 @@ public class TimesheetService {
 
     public String getDefaultManagerUserId() {
         // Example: return the first user with "ACCOUNTS" role
-        return userRegisterClient.getUsersByRole("ACCOUNTS")
+        return userRegisterClient.getUsersByRole("ADMIN")
                 .stream()
                 .findFirst()
                 .map(UserDto::getUserId)
@@ -676,7 +676,7 @@ public class TimesheetService {
         List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(ts.getUserId());
         String employeeName = userInfos.isEmpty() ? "Unknown" : userInfos.get(0).getUserName();
         String employeeEmail = userRegisterClient.getUserEmail(ts.getUserId());
-        UserDto approvalName = userRegisterClient.getUserNameByRole("ACCOUNTS");
+        UserDto approvalName = userRegisterClient.getUserNameByRole("ADMIN");
         System.out.println("Employee Name: " + employeeName);
         System.out.println("Employee Email: " + employeeEmail);
 
@@ -768,7 +768,7 @@ public class TimesheetService {
         List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(ts.getUserId());
         String employeeName = userInfos.isEmpty() ? "Unknown" : userInfos.get(0).getUserName();
         String employeeEmail = userRegisterClient.getUserEmail(ts.getUserId());
-        UserDto approvalName = userRegisterClient.getUserNameByRole("ACCOUNTS");
+        UserDto approvalName = userRegisterClient.getUserNameByRole("ADMIN");
         System.out.println("Employee Name: " + employeeName);
         System.out.println("Employee Email: " + employeeEmail);
 
