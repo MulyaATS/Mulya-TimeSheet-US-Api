@@ -53,8 +53,8 @@ public class TimesheetController {
     public ResponseEntity<ApiResponse<TimesheetSummaryDto>> saveDailyEntry(
             @RequestParam String userId,
             @Valid @RequestBody TimesheetRequest request) {
-        Timesheet ts = timesheetService.createTimesheet(userId, request);
-        TimesheetSummaryDto summaryDto = timesheetService.toSummaryDto(ts);
+        List<Timesheet> timesheets = timesheetService.createTimesheet(userId, request);
+        TimesheetSummaryDto summaryDto = timesheetService.toSummaryDto(timesheets.get(0)); // example: use the first
         return ResponseEntity.ok(ApiResponse.success("Entry saved", summaryDto));
     }
 

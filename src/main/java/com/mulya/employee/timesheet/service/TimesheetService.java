@@ -62,7 +62,7 @@ public class TimesheetService {
 
 
     @Transactional
-    public Timesheet createTimesheet(String userId, TimesheetRequest req) {
+    public List<Timesheet> createTimesheet(String userId, TimesheetRequest req) {
         Map<String, String> errors = new HashMap<>();
         UserDto user = userRegisterClient.getUserById(userId);
         if (user == null) {
@@ -102,95 +102,15 @@ public class TimesheetService {
         LocalDate weekStart = submitDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         LocalDate weekEnd = weekStart.plusDays(4);
 
-        Timesheet ts = timesheetRepository.findByUserIdAndWeekStartDate(userId, weekStart)
-                .orElseGet(() -> {
-                    Timesheet t = new Timesheet();
-                    t.setUserId(userId);
-                    t.setTimesheetType(timesheetType);
-                    t.setTimesheetDate(weekStart);
-                    t.setWeekStartDate(weekStart);
-                    t.setWeekEndDate(weekEnd);
-                    t.setEmployeeType(employeeType);
-                    t.setStatus("DRAFT");
-                    t.setWorkingHours("[]");
-                    t.setNonWorkingHours("[]");
-                    t.setPercentageOfTarget(0.0);
-                    t.setNotes(note);
-                    t.setTimesheetId(generateNextTimesheetId());
-                    logger.info("[Creation] New timesheet for week {} - {}", weekStart, weekEnd);
-                    return t;
-                });
+        // Split the week into month-bound segments for partial timesheets
+        List<Pair<LocalDate, LocalDate>> partialWeeks = splitWeekByMonth(weekStart, weekEnd);
 
-        // Deserialize existing entries
-        List<TimesheetEntry> currentWorkingHours;
-        List<TimesheetEntry> currentNonWorkingHours;
-        try {
-            currentWorkingHours = mapper.readValue(ts.getWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
-        } catch (Exception e) {
-            currentWorkingHours = new ArrayList<>();
-        }
-        try {
-            currentNonWorkingHours = mapper.readValue(ts.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
-        } catch (Exception e) {
-            currentNonWorkingHours = new ArrayList<>();
-        }
+        List<TimesheetEntry> newWorkingEntries = req.getWorkingEntries();
+        List<TimesheetEntry> newNonWorkingEntries = req.getNonWorkingEntries();
 
-        // Validate new entries are within week range
-        for (TimesheetEntry newEntry : req.getWorkingEntries()) {
-            if (newEntry.getDate().isBefore(weekStart) || newEntry.getDate().isAfter(weekEnd)) {
-                throw new IllegalArgumentException("Entry date " + newEntry.getDate() + " is outside the current timesheet's week range.");
-            }
-        }
-        for (TimesheetEntry newEntry : req.getNonWorkingEntries()) {
-            if (newEntry.getDate().isBefore(weekStart) || newEntry.getDate().isAfter(weekEnd)) {
-                throw new IllegalArgumentException("Entry date " + newEntry.getDate() + " is outside the current timesheet's week range.");
-            }
-        }
-
-        // REMOVE old leave entries (nonWorkingHours) for dates where a workingHours entry is being added
-        Set<LocalDate> newWorkingDates = req.getWorkingEntries().stream()
-                .map(TimesheetEntry::getDate)
-                .collect(Collectors.toSet());
-
-        List<TimesheetEntry> cancelledLeaves = currentNonWorkingHours.stream()
-                .filter(e -> newWorkingDates.contains(e.getDate()) && e.getHours() == 8.0)
-                .collect(Collectors.toList());
-
-        currentNonWorkingHours.removeIf(entry -> newWorkingDates.contains(entry.getDate()));
-
-        // Remove replaced working entries for same date, merge new
-        currentWorkingHours.removeIf(entry -> newWorkingDates.contains(entry.getDate()));
-        currentWorkingHours.addAll(req.getWorkingEntries());
-
-        // Remove replaced non-working entries for same date, merge new
-        Set<LocalDate> newNonWorkingDates = req.getNonWorkingEntries().stream()
-                .map(TimesheetEntry::getDate)
-                .collect(Collectors.toSet());
-        currentNonWorkingHours.removeIf(entry -> newNonWorkingDates.contains(entry.getDate()));
-        currentNonWorkingHours.addAll(req.getNonWorkingEntries());
-
-        // Serialize back
-        try {
-            ts.setWorkingHours(mapper.writeValueAsString(currentWorkingHours));
-            ts.setNonWorkingHours(mapper.writeValueAsString(currentNonWorkingHours));
-        } catch (Exception e) {
-            throw new RuntimeException("Error serializing working/non-working hours JSON", e);
-        }
-
-        // Calculate workdays count for the whole week
-        int workingDaysCount = 0;
-        LocalDate cursor = weekStart;
-        while (!cursor.isAfter(weekEnd)) {
-            if (cursor.getDayOfWeek() != DayOfWeek.SATURDAY && cursor.getDayOfWeek() != DayOfWeek.SUNDAY) {
-                workingDaysCount++;
-            }
-            cursor = cursor.plusDays(1);
-        }
-        double targetHours = workingDaysCount * 8.0;
-
-        // Get employee full-time status for leave inclusion
         String employeeEmail = userRegisterClient.getUserEmail(userId);
         String fullEmployeeType = "Unknown";
+        boolean isFullTime = false;
         if (employeeEmail != null && !employeeEmail.isBlank()) {
             try {
                 List<PlacementDetailsDto> placements = candidateClient.getPlacementsByEmail(employeeEmail);
@@ -201,29 +121,148 @@ public class TimesheetService {
                 logger.warn("Could not fetch placement data for email {}: {}", employeeEmail, ex.getMessage());
             }
         }
-        boolean isFullTime = "Full-time".equalsIgnoreCase(fullEmployeeType);
+        isFullTime = "Full-time".equalsIgnoreCase(fullEmployeeType);
 
-        double totalWorkingHours = currentWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
-        double totalNonWorkingHours = currentNonWorkingHours.stream().mapToDouble(TimesheetEntry::getHours).sum();
+        List<Timesheet> savedTimesheets = new ArrayList<>();
 
-        double effectiveWorkingHours = totalWorkingHours + (isFullTime ? totalNonWorkingHours : 0.0);
+        for (Pair<LocalDate, LocalDate> segment : partialWeeks) {
+            LocalDate partialStart = segment.getLeft();
+            LocalDate partialEnd = segment.getRight();
 
-        double percentageOfTarget = targetHours == 0 ? 0 : (effectiveWorkingHours / targetHours) * 100;
-        ts.setPercentageOfTarget(percentageOfTarget);
+            // Filter entries for the current partial segment
+            List<TimesheetEntry> segmentWorkingEntries = newWorkingEntries.stream()
+                    .filter(e -> !e.getDate().isBefore(partialStart) && !e.getDate().isAfter(partialEnd))
+                    .collect(Collectors.toList());
 
-        // If any leave is cancelled (for full-time), refund that leave in leaveSummary
-        if (isFullTime && !cancelledLeaves.isEmpty()) {
-            EmployeeLeaveSummary leaveSummary = employeeLeaveSummaryRepository.findByUserId(userId).orElse(null);
-            if (leaveSummary != null) {
-                int refundCount = cancelledLeaves.size();
-                leaveSummary.setAvailableLeaves(leaveSummary.getAvailableLeaves() + refundCount);
-                leaveSummary.setTakenLeaves(Math.max(0, leaveSummary.getTakenLeaves() - refundCount));
-                employeeLeaveSummaryRepository.save(leaveSummary);
-                logger.info("[Leave Refund] Refunded {} leaves for userId {}", refundCount, userId);
+            List<TimesheetEntry> segmentNonWorkingEntries = newNonWorkingEntries.stream()
+                    .filter(e -> !e.getDate().isBefore(partialStart) && !e.getDate().isAfter(partialEnd))
+                    .collect(Collectors.toList());
+
+            Timesheet ts = timesheetRepository.findByUserIdAndWeekStartDate(userId, partialStart)
+                    .orElseGet(() -> {
+                        Timesheet t = new Timesheet();
+                        t.setUserId(userId);
+                        t.setTimesheetType(timesheetType);
+                        t.setTimesheetDate(partialStart);
+                        t.setWeekStartDate(partialStart);
+                        t.setWeekEndDate(partialEnd);
+                        t.setEmployeeType(employeeType);
+                        t.setStatus("DRAFT");
+                        t.setWorkingHours("[]");
+                        t.setNonWorkingHours("[]");
+                        t.setPercentageOfTarget(0.0);
+                        t.setNotes(note);
+                        t.setTimesheetId(generateNextTimesheetId());
+                        logger.info("[Creation] New timesheet for {} - {}", partialStart, partialEnd);
+                        return t;
+                    });
+
+            // Deserialize existing entries
+            List<TimesheetEntry> currentWorkingHours;
+            List<TimesheetEntry> currentNonWorkingHours;
+            try {
+                currentWorkingHours = mapper.readValue(ts.getWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
+            } catch (Exception e) {
+                currentWorkingHours = new ArrayList<>();
             }
+            try {
+                currentNonWorkingHours = mapper.readValue(ts.getNonWorkingHours(), new TypeReference<List<TimesheetEntry>>() {});
+            } catch (Exception e) {
+                currentNonWorkingHours = new ArrayList<>();
+            }
+
+            // Remove replaced working entries for dates in segment and merge segment entries
+            Set<LocalDate> segmentWorkingDates = segmentWorkingEntries.stream()
+                    .map(TimesheetEntry::getDate)
+                    .collect(Collectors.toSet());
+            currentWorkingHours.removeIf(entry -> segmentWorkingDates.contains(entry.getDate()));
+            currentWorkingHours.addAll(segmentWorkingEntries);
+
+            // Remove replaced non-working entries for dates in segment and merge segment entries
+            Set<LocalDate> segmentNonWorkingDates = segmentNonWorkingEntries.stream()
+                    .map(TimesheetEntry::getDate)
+                    .collect(Collectors.toSet());
+            currentNonWorkingHours.removeIf(entry -> segmentNonWorkingDates.contains(entry.getDate()));
+            currentNonWorkingHours.addAll(segmentNonWorkingEntries);
+
+            // --- LEAVE CANCELLATION & REFUND LOGIC ---
+            // Find leaves cancelled by newly added working hours (8 hrs full days)
+            Set<LocalDate> newWorkingDates = segmentWorkingEntries.stream()
+                    .map(TimesheetEntry::getDate)
+                    .collect(Collectors.toSet());
+
+            List<TimesheetEntry> cancelledLeaves = currentNonWorkingHours.stream()
+                    .filter(e -> newWorkingDates.contains(e.getDate()) && e.getHours() == 8.0)
+                    .collect(Collectors.toList());
+
+            // Remove cancelled leaves from non-working entries
+            currentNonWorkingHours.removeIf(entry -> newWorkingDates.contains(entry.getDate()) && entry.getHours() == 8.0);
+
+            // Serialize updated entries back
+            try {
+                ts.setWorkingHours(mapper.writeValueAsString(currentWorkingHours));
+                ts.setNonWorkingHours(mapper.writeValueAsString(currentNonWorkingHours));
+            } catch (Exception e) {
+                throw new RuntimeException("Error serializing working/non-working hours JSON", e);
+            }
+
+            // Calculate working days & target hours for partial segment
+            int segmentWorkingDays = 0;
+            LocalDate cursor = partialStart;
+            while (!cursor.isAfter(partialEnd)) {
+                DayOfWeek dow = cursor.getDayOfWeek();
+                if (dow != DayOfWeek.SATURDAY && dow != DayOfWeek.SUNDAY) {
+                    segmentWorkingDays++;
+                }
+                cursor = cursor.plusDays(1);
+            }
+            double targetHours = segmentWorkingDays * 8.0;
+
+            // Calculate effective working hours within this segment
+            double totalWorkingHours = currentWorkingHours.stream()
+                    .filter(e -> !e.getDate().isBefore(partialStart) && !e.getDate().isAfter(partialEnd))
+                    .mapToDouble(TimesheetEntry::getHours)
+                    .sum();
+            double totalNonWorkingHours = currentNonWorkingHours.stream()
+                    .filter(e -> !e.getDate().isBefore(partialStart) && !e.getDate().isAfter(partialEnd))
+                    .mapToDouble(TimesheetEntry::getHours)
+                    .sum();
+
+            double effectiveWorkingHours = totalWorkingHours + (isFullTime ? totalNonWorkingHours : 0.0);
+            double percentageOfTarget = targetHours == 0 ? 0 : (effectiveWorkingHours / targetHours) * 100;
+            ts.setPercentageOfTarget(percentageOfTarget);
+
+            // Refund cancelled leaves in EmployeeLeaveSummary for full-time employees
+            if (isFullTime && !cancelledLeaves.isEmpty()) {
+                EmployeeLeaveSummary leaveSummary = employeeLeaveSummaryRepository.findByUserId(userId).orElse(null);
+                if (leaveSummary != null) {
+                    int refundCount = cancelledLeaves.size();
+                    leaveSummary.setAvailableLeaves(leaveSummary.getAvailableLeaves() + refundCount);
+                    leaveSummary.setTakenLeaves(Math.max(0, leaveSummary.getTakenLeaves() - refundCount));
+                    employeeLeaveSummaryRepository.save(leaveSummary);
+                    logger.info("[Leave Refund] Refunded {} leaves for userId {}", refundCount, userId);
+                }
+            }
+
+            savedTimesheets.add(timesheetRepository.save(ts));
         }
 
-        return timesheetRepository.save(ts);
+        return savedTimesheets;
+    }
+
+
+    // Helper: splits a week into continuous month-bound segments
+    private List<Pair<LocalDate, LocalDate>> splitWeekByMonth(LocalDate start, LocalDate end) {
+        List<Pair<LocalDate, LocalDate>> segments = new ArrayList<>();
+        LocalDate tempStart = start;
+        while (!tempStart.isAfter(end)) {
+            YearMonth ym = YearMonth.from(tempStart);
+            LocalDate monthEnd = ym.atEndOfMonth();
+            LocalDate segmentEnd = monthEnd.isBefore(end) ? monthEnd : end;
+            segments.add(Pair.of(tempStart, segmentEnd));
+            tempStart = segmentEnd.plusDays(1);
+        }
+        return segments;
     }
 
 
@@ -1097,13 +1136,9 @@ public class TimesheetService {
     public List<EmployeeMonthlyTimesheetDto> getAllEmployeesMonthlySummary(LocalDate monthStart, LocalDate monthEnd) throws Exception {
         logger.info("Fetching timesheets from {} to {}", monthStart, monthEnd);
 
-        // Extend query period to earliest Monday before monthStart for partial weeks
-        LocalDate firstMonday = monthStart;
-        while (firstMonday.getDayOfWeek() != DayOfWeek.MONDAY) {
-            firstMonday = firstMonday.minusDays(1);
-        }
-
-        List<Timesheet> timesheets = timesheetRepository.findByWeekStartDateBetween(firstMonday, monthEnd);
+        // Extend query period to earliest Monday before monthStart for partial weeks if desired,
+        // but here we directly query timesheets within the requested month to exclude outside data:
+        List<Timesheet> timesheets = timesheetRepository.findByWeekStartDateBetween(monthStart, monthEnd);
 
         Map<String, List<Timesheet>> byUser = timesheets.stream()
                 .collect(Collectors.groupingBy(Timesheet::getUserId));
@@ -1119,7 +1154,7 @@ public class TimesheetService {
 
         Set<String> userIds = byUser.keySet();
 
-        // Bulk fetch leave summaries for all users
+        // Bulk fetch leave summaries for users relevant in requested month
         Map<String, EmployeeLeaveSummary> leaveSummariesMap = employeeLeaveSummaryRepository.findByUserIdIn(userIds)
                 .stream()
                 .collect(Collectors.toMap(EmployeeLeaveSummary::getUserId, ls -> ls));
@@ -1130,6 +1165,7 @@ public class TimesheetService {
             String userId = entry.getKey();
             List<Timesheet> empTimesheets = entry.getValue();
 
+            // Initialize arrays for weekly aggregation
             double[] weeklyWorkHours = new double[calendarWeeks.size()];
             double[] weeklyLeaveHours = new double[calendarWeeks.size()];
             String[] weeklyStatuses = new String[calendarWeeks.size()];
@@ -1137,6 +1173,11 @@ public class TimesheetService {
 
             for (Timesheet ts : empTimesheets) {
                 LocalDate tsDate = ts.getWeekStartDate();
+
+                // Skip timesheets outside requested month still (extra safety)
+                if (tsDate.isBefore(monthStart) || tsDate.isAfter(monthEnd)) {
+                    continue;
+                }
 
                 int weekIndex = -1;
                 for (int i = 0; i < calendarWeeks.size(); i++) {
@@ -1206,13 +1247,11 @@ public class TimesheetService {
             double totalWorkingHours = Arrays.stream(weeklyWorkHours).sum();
             double totalLeaveHours = Arrays.stream(weeklyLeaveHours).sum();
 
-            // Use leave summary from DB - no saving, no recalculation
             EmployeeLeaveSummary leaveSummary = leaveSummariesMap.get(userId);
 
             int availableLeaves = leaveSummary != null ? leaveSummary.getAvailableLeaves() : 0;
             int takenLeaves = leaveSummary != null ? leaveSummary.getTakenLeaves() : 0;
 
-            // Adjust working hours for full-time paid leave hours included
             if (availableLeaves >= 0 && "Full-time".equalsIgnoreCase(employeeType)) {
                 totalWorkingHours += totalLeaveHours;
                 for (int i = 0; i < weeklyWorkHours.length; i++) {
