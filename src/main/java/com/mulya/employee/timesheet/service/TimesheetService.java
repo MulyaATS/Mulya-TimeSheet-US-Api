@@ -185,6 +185,19 @@ public class TimesheetService {
             currentNonWorkingHours.removeIf(entry -> segmentNonWorkingDates.contains(entry.getDate()));
             currentNonWorkingHours.addAll(segmentNonWorkingEntries);
 
+            // --- LEAVE CANCELLATION & REFUND LOGIC ---
+            // Find leaves cancelled by newly added working hours (8 hrs full days)
+            Set<LocalDate> newWorkingDates = segmentWorkingEntries.stream()
+                    .map(TimesheetEntry::getDate)
+                    .collect(Collectors.toSet());
+
+            List<TimesheetEntry> cancelledLeaves = currentNonWorkingHours.stream()
+                    .filter(e -> newWorkingDates.contains(e.getDate()) && e.getHours() == 8.0)
+                    .collect(Collectors.toList());
+
+            // Remove cancelled leaves from non-working entries
+            currentNonWorkingHours.removeIf(entry -> newWorkingDates.contains(entry.getDate()) && entry.getHours() == 8.0);
+
             // Serialize updated entries back
             try {
                 ts.setWorkingHours(mapper.writeValueAsString(currentWorkingHours));
@@ -214,15 +227,29 @@ public class TimesheetService {
                     .filter(e -> !e.getDate().isBefore(partialStart) && !e.getDate().isAfter(partialEnd))
                     .mapToDouble(TimesheetEntry::getHours)
                     .sum();
+
             double effectiveWorkingHours = totalWorkingHours + (isFullTime ? totalNonWorkingHours : 0.0);
             double percentageOfTarget = targetHours == 0 ? 0 : (effectiveWorkingHours / targetHours) * 100;
             ts.setPercentageOfTarget(percentageOfTarget);
+
+            // Refund cancelled leaves in EmployeeLeaveSummary for full-time employees
+            if (isFullTime && !cancelledLeaves.isEmpty()) {
+                EmployeeLeaveSummary leaveSummary = employeeLeaveSummaryRepository.findByUserId(userId).orElse(null);
+                if (leaveSummary != null) {
+                    int refundCount = cancelledLeaves.size();
+                    leaveSummary.setAvailableLeaves(leaveSummary.getAvailableLeaves() + refundCount);
+                    leaveSummary.setTakenLeaves(Math.max(0, leaveSummary.getTakenLeaves() - refundCount));
+                    employeeLeaveSummaryRepository.save(leaveSummary);
+                    logger.info("[Leave Refund] Refunded {} leaves for userId {}", refundCount, userId);
+                }
+            }
 
             savedTimesheets.add(timesheetRepository.save(ts));
         }
 
         return savedTimesheets;
     }
+
 
     // Helper: splits a week into continuous month-bound segments
     private List<Pair<LocalDate, LocalDate>> splitWeekByMonth(LocalDate start, LocalDate end) {
