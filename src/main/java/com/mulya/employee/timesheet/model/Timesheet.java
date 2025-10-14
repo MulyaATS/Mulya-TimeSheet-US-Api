@@ -5,7 +5,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 @Entity
-@Table(name = "timesheets")
+@Table(name = "timesheets_us")
 public class Timesheet {
 
     @Id

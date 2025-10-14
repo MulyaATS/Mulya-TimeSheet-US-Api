@@ -30,7 +30,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @RestController
-@RequestMapping("/timesheet")
+@RequestMapping("/api/us/timesheet")
 @Tag(name = "Timesheet API")
 @CrossOrigin
 public class TimesheetController {

@@ -6,7 +6,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "attachments")
+@Table(name = "attachments_us")
 public class Attachment {
 
     @Id

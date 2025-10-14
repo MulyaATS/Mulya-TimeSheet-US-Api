@@ -2,7 +2,7 @@ package com.mulya.employee.timesheet.model;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 @Entity
-@Table(name = "employee_leave_summary")
+@Table(name = "employee_leave_summary_us")
 public class EmployeeLeaveSummary {
     @Id
     @Column(name = "user_id", nullable = false)
