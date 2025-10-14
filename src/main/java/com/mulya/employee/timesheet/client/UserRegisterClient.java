@@ -13,8 +13,10 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class UserRegisterClient {
@@ -66,6 +68,31 @@ public class UserRegisterClient {
         users.forEach(this::setEmployeeTypeFromRole);
         return users;
     }
+
+    public UserInfoDto getUserRoleAndUsername(String userId) {
+        String url = userServiceBaseUrl + "/usernameByRole/" + userId;
+
+        try {
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                    url, HttpMethod.GET, null,
+                    new ParameterizedTypeReference<Map<String, Object>>() {}
+            );
+
+            Map<String, Object> body = response.getBody();
+            if (body == null || body.isEmpty()) {
+                throw new ResourceNotFoundException("User info not found for ID: " + userId, ResourceNotFoundException.ResourceType.USER);
+            }
+
+            UserInfoDto dto = new UserInfoDto();
+            dto.setUserId(userId);
+            dto.setUserName((String) body.get("userName"));
+            return dto;
+        } catch (HttpClientErrorException.NotFound ex) {
+            throw new ResourceNotFoundException("User not found with ID: " + userId, ResourceNotFoundException.ResourceType.USER);
+        }
+    }
+
+
 
     /**
      * Fetch user info (userName) by userId(s).
