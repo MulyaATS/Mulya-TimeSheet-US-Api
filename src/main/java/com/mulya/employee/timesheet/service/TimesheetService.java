@@ -807,7 +807,7 @@ public class TimesheetService {
         List<UserInfoDto> userInfos = userRegisterClient.getUserInfos(ts.getUserId());
         String employeeName = userInfos.isEmpty() ? "Unknown" : userInfos.get(0).getUserName();
         String employeeEmail = userRegisterClient.getUserEmail(ts.getUserId());
-        UserDto approvalName = userRegisterClient.getUserNameByRole("ADMIN");
+        UserInfoDto approvalName = userRegisterClient.getUserRoleAndUsername("ADRTIN189");
         System.out.println("Employee Name: " + employeeName);
         System.out.println("Employee Email: " + employeeEmail);
 
