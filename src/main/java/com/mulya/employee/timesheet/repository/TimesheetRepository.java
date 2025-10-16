@@ -17,7 +17,7 @@ public interface TimesheetRepository  extends JpaRepository<Timesheet, Long> {
 
     Optional<Timesheet> findByUserIdAndWeekStartDate(String userId, LocalDate weekStartDate);
 
-    @Query(value = "SELECT timesheet_id FROM timesheets ORDER BY timesheet_id DESC LIMIT 1", nativeQuery = true)
+    @Query(value = "SELECT timesheet_id FROM timesheets_us ORDER BY timesheet_id DESC LIMIT 1", nativeQuery = true)
     String findMaxTimesheetId();
 
     Optional<Timesheet> findByTimesheetId(String timesheetId);
