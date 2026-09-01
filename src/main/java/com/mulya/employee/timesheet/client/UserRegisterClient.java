@@ -1,5 +1,6 @@
 package com.mulya.employee.timesheet.client;
 
+import com.mulya.employee.timesheet.dto.ApiResponse;
 import com.mulya.employee.timesheet.dto.UserDto;
 import com.mulya.employee.timesheet.dto.UserInfoDto;
 import com.mulya.employee.timesheet.exception.ResourceNotFoundException;
@@ -161,6 +162,33 @@ public class UserRegisterClient {
             user.setEmployeeType("EXTERNAL");
         } else {
             user.setEmployeeType("INTERNAL");
+        }
+    }
+
+    public String getUserIdByEmail(String email) {
+        String url = UriComponentsBuilder.fromHttpUrl(userServiceBaseUrl + "/email")
+                .queryParam("email", email)
+                .toUriString();
+
+        try {
+            ResponseEntity<ApiResponse<UserInfoDto>> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    null,
+                    new ParameterizedTypeReference<ApiResponse<UserInfoDto>>() {}
+            );
+
+            ApiResponse<UserInfoDto> apiResponse = response.getBody();
+
+            if (apiResponse != null && apiResponse.isSuccess() && apiResponse.getData() != null) {
+                return apiResponse.getData().getUserId();
+            } else {
+                throw new ResourceNotFoundException("User not found with email: " + email, ResourceNotFoundException.ResourceType.USER);
+            }
+        } catch (HttpClientErrorException.NotFound ex) {
+            throw new ResourceNotFoundException("User not found with email: " + email, ResourceNotFoundException.ResourceType.USER);
+        } catch (Exception e) {
+            return null;
         }
     }
 }

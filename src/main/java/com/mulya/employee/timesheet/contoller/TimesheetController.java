@@ -342,6 +342,23 @@ public class TimesheetController {
         return ResponseEntity.ok(ApiResponse.success("Monthly timesheet summaries fetched", summaries));
     }
 
+    @GetMapping("/yearly-dashboard")
+    public ResponseEntity<ApiResponse<List<EmployeeYearlyTimesheetDto>>> getYearlyDashboard(
+            @RequestParam(required = false) Integer year
+    ) {
+        int dashboardYear = year == null ? LocalDate.now().getYear() : year;
+        List<EmployeeYearlyTimesheetDto> rows = timesheetService.getYearlyDashboard(dashboardYear);
+        return ResponseEntity.ok(ApiResponse.success("Yearly timesheet dashboard fetched", rows));
+    }
+
+    @PutMapping("/yearly-dashboard/hours")
+    public ResponseEntity<ApiResponse<EmployeeYearlyTimesheetDto>> saveYearlyDashboardHours(
+            @RequestBody YearlyHoursUpdateRequest request
+    ) {
+        EmployeeYearlyTimesheetDto updated = timesheetService.saveYearlyDashboardHours(request);
+        return ResponseEntity.ok(ApiResponse.success("Yearly dashboard hours updated", updated));
+    }
+
     @PostMapping("/leave-initialization")
     public ResponseEntity<ApiResponse<EmployeeLeaveSummaryDto>> initializeLeave(@RequestBody EmployeeLeaveSummaryDto dto) {
         try {

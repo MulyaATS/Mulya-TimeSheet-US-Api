@@ -10,9 +10,11 @@ import com.mulya.employee.timesheet.exception.ValidationException;
 import com.mulya.employee.timesheet.model.Attachment;
 import com.mulya.employee.timesheet.model.EmployeeLeaveSummary;
 import com.mulya.employee.timesheet.model.Timesheet;
+import com.mulya.employee.timesheet.model.TimesheetMonthlyHourOverride;
 import com.mulya.employee.timesheet.model.TimesheetType;
 import com.mulya.employee.timesheet.repository.AttachmentRepository;
 import com.mulya.employee.timesheet.repository.EmployeeLeaveSummaryRepository;
+import com.mulya.employee.timesheet.repository.TimesheetMonthlyHourOverrideRepository;
 import com.mulya.employee.timesheet.repository.TimesheetRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.lang3.tuple.Pair;
@@ -57,6 +59,9 @@ public class TimesheetService {
 
     @Autowired
     private EmployeeLeaveSummaryRepository employeeLeaveSummaryRepository;
+
+    @Autowired
+    private TimesheetMonthlyHourOverrideRepository monthlyHourOverrideRepository;
 
     private static final Logger logger = LoggerFactory.getLogger(TimesheetService.class);
 
@@ -1286,6 +1291,220 @@ public class TimesheetService {
 
         logger.info("Completed processing monthly summaries for {} employees", summaries.size());
         return summaries;
+    }
+
+    public List<EmployeeYearlyTimesheetDto> getYearlyDashboard(int year) {
+        LocalDate yearStart = LocalDate.of(year, 1, 1);
+        LocalDate yearEnd = LocalDate.of(year, 12, 31);
+        logger.info("Fetching yearly US timesheet dashboard for {}", year);
+
+        List<PlacementDetailsDto> placements;
+        try {
+            placements = candidateClient.getAllPlacements();
+        } catch (Exception ex) {
+            logger.warn("Unable to load US placements for yearly dashboard: {}", ex.getMessage());
+            placements = Collections.emptyList();
+        }
+
+        // US placement.userId is the creator, not the consultant. Identity is email.
+        Map<String, PlacementDetailsDto> placementByEmail = new LinkedHashMap<>();
+        for (PlacementDetailsDto placement : placements) {
+            if (placement == null || placement.getCandidateEmail() == null || placement.getCandidateEmail().isBlank()) {
+                continue;
+            }
+            String email = placement.getCandidateEmail().trim().toLowerCase();
+            placementByEmail.putIfAbsent(email, placement);
+        }
+
+        Map<String, String> emailToUserId = new LinkedHashMap<>();
+        for (String email : placementByEmail.keySet()) {
+            try {
+                String userId = userRegisterClient.getUserIdByEmail(email);
+                if (userId != null && !userId.isBlank()) {
+                    emailToUserId.put(email, userId);
+                }
+            } catch (Exception ex) {
+                logger.warn("User ID not found for email: {}", email);
+            }
+        }
+
+        Set<String> timesheetUserIds = new HashSet<>(emailToUserId.values());
+        List<Timesheet> yearTimesheets = timesheetUserIds.isEmpty()
+                ? Collections.emptyList()
+                : timesheetRepository.findByWeekStartDateBetween(yearStart.minusDays(7), yearEnd)
+                    .stream()
+                    .filter(t -> timesheetUserIds.contains(t.getUserId()))
+                    .collect(Collectors.toList());
+
+        Map<String, List<Timesheet>> timesheetsByUser = yearTimesheets.stream()
+                .collect(Collectors.groupingBy(Timesheet::getUserId));
+
+        Set<String> overrideKeys = new HashSet<>(emailToUserId.values());
+        overrideKeys.addAll(placementByEmail.keySet());
+        Map<String, List<TimesheetMonthlyHourOverride>> overridesByKey = overrideKeys.isEmpty()
+                ? Collections.emptyMap()
+                : monthlyHourOverrideRepository.findByUserIdInAndYear(overrideKeys, year).stream()
+                    .collect(Collectors.groupingBy(TimesheetMonthlyHourOverride::getUserId));
+
+        List<EmployeeYearlyTimesheetDto> rows = new ArrayList<>();
+
+        for (Map.Entry<String, PlacementDetailsDto> entry : placementByEmail.entrySet()) {
+            String email = entry.getKey();
+            PlacementDetailsDto placement = entry.getValue();
+            String userId = emailToUserId.get(email);
+            String rowKey = userId != null && !userId.isBlank() ? userId : email;
+
+            LocalDate joiningDate = placement.getStartDate();
+            if (joiningDate != null && joiningDate.isAfter(yearEnd)) {
+                continue;
+            }
+
+            String employeeType = placement.getEmployeeType() != null
+                    ? placement.getEmployeeType()
+                    : "Unknown";
+            boolean includeLeaveHours = "C2C".equalsIgnoreCase(employeeType);
+
+            double[] monthHours = new double[12];
+            List<Timesheet> empTimesheets = userId == null
+                    ? Collections.emptyList()
+                    : timesheetsByUser.getOrDefault(userId, Collections.emptyList());
+            for (Timesheet ts : empTimesheets) {
+                addHoursToYear(ts.getWorkingHours(), year, monthHours);
+                if (includeLeaveHours) {
+                    addHoursToYear(ts.getNonWorkingHours(), year, monthHours);
+                }
+            }
+
+            String employeeName = placement.getCandidateFullName();
+            if (employeeName == null || employeeName.isBlank()) {
+                employeeName = "Unknown";
+                if (userId != null) {
+                    try {
+                        List<UserInfoDto> userInfoList = userRegisterClient.getUserInfos(userId);
+                        if (userInfoList != null && !userInfoList.isEmpty() && userInfoList.get(0).getUserName() != null) {
+                            employeeName = userInfoList.get(0).getUserName();
+                        }
+                    } catch (Exception ex) {
+                        logger.warn("Unable to resolve username for {}: {}", userId, ex.getMessage());
+                    }
+                }
+            }
+
+            List<Integer> monthlyHours = new ArrayList<>(12);
+            int totalHours = 0;
+            for (double hours : monthHours) {
+                int rounded = (int) Math.round(hours);
+                monthlyHours.add(rounded);
+                totalHours += rounded;
+            }
+
+            applyMonthlyHourOverrides(overridesByKey.get(rowKey), monthlyHours);
+            totalHours = monthlyHours.stream().mapToInt(Integer::intValue).sum();
+
+            EmployeeYearlyTimesheetDto dto = new EmployeeYearlyTimesheetDto();
+            String candidateId = placement.getCandidateId() != null && !placement.getCandidateId().isBlank()
+                    ? placement.getCandidateId()
+                    : (placement.getId() != null ? placement.getId() : rowKey);
+            dto.setCandidateId(candidateId);
+            dto.setEmployeeId(rowKey);
+            dto.setCandidateName(employeeName);
+            dto.setEmploymentType(employeeType);
+            dto.setVendor(placement.getVendorName());
+            dto.setClient(placement.getClientName());
+            dto.setStartDate(joiningDate);
+            dto.setEndDate(placement.getEndDate());
+            dto.setMonthlyHours(monthlyHours);
+            dto.setTotalHours(totalHours);
+            rows.add(dto);
+        }
+
+        rows.sort(Comparator.comparing(
+                EmployeeYearlyTimesheetDto::getCandidateName,
+                Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)));
+        logger.info("Yearly US dashboard ready for {} employees", rows.size());
+        return rows;
+    }
+
+    @Transactional
+    public EmployeeYearlyTimesheetDto saveYearlyDashboardHours(YearlyHoursUpdateRequest request) {
+        if (request == null || request.getEmployeeId() == null || request.getEmployeeId().isBlank()) {
+            throw new IllegalArgumentException("Employee ID is required");
+        }
+        if (request.getYear() == null || request.getYear() < 2000) {
+            throw new IllegalArgumentException("A valid year is required");
+        }
+        if (request.getMonthlyHours() == null || request.getMonthlyHours().size() != 12) {
+            throw new IllegalArgumentException("Monthly hours must include 12 values");
+        }
+
+        String userId = request.getEmployeeId();
+        int year = request.getYear();
+
+        for (int monthIndex = 0; monthIndex < 12; monthIndex++) {
+            Integer hoursValue = request.getMonthlyHours().get(monthIndex);
+            int hours = hoursValue == null ? 0 : Math.max(0, hoursValue);
+            int monthNumber = monthIndex + 1;
+
+            TimesheetMonthlyHourOverride override = monthlyHourOverrideRepository
+                    .findByUserIdAndYearAndMonthNumber(userId, year, monthNumber)
+                    .orElseGet(TimesheetMonthlyHourOverride::new);
+            override.setUserId(userId);
+            override.setYear(year);
+            override.setMonthNumber(monthNumber);
+            override.setHours(hours);
+            monthlyHourOverrideRepository.save(override);
+        }
+
+        return getYearlyDashboard(year).stream()
+                .filter(row -> userId.equals(row.getEmployeeId()))
+                .findFirst()
+                .orElseGet(() -> {
+                    EmployeeYearlyTimesheetDto dto = new EmployeeYearlyTimesheetDto();
+                    dto.setEmployeeId(userId);
+                    dto.setMonthlyHours(request.getMonthlyHours());
+                    dto.setTotalHours(request.getMonthlyHours().stream()
+                            .mapToInt(value -> value == null ? 0 : Math.max(0, value))
+                            .sum());
+                    return dto;
+                });
+    }
+
+    private void applyMonthlyHourOverrides(List<TimesheetMonthlyHourOverride> overrides, List<Integer> monthlyHours) {
+        if (overrides == null || monthlyHours == null || monthlyHours.size() != 12) {
+            return;
+        }
+        for (TimesheetMonthlyHourOverride override : overrides) {
+            if (override.getMonthNumber() == null || override.getHours() == null) {
+                continue;
+            }
+            int monthIndex = override.getMonthNumber() - 1;
+            if (monthIndex >= 0 && monthIndex < 12) {
+                monthlyHours.set(monthIndex, Math.max(0, override.getHours()));
+            }
+        }
+    }
+
+    private void addHoursToYear(String hoursJson, int year, double[] monthHours) {
+        if (hoursJson == null || hoursJson.isBlank() || monthHours == null) {
+            return;
+        }
+        try {
+            List<TimesheetEntry> entries = mapper.readValue(hoursJson, new TypeReference<List<TimesheetEntry>>() {});
+            if (entries == null) {
+                return;
+            }
+            for (TimesheetEntry entry : entries) {
+                if (entry == null || entry.getDate() == null || entry.getHours() == null) {
+                    continue;
+                }
+                if (entry.getDate().getYear() != year) {
+                    continue;
+                }
+                monthHours[entry.getDate().getMonthValue() - 1] += entry.getHours();
+            }
+        } catch (Exception ex) {
+            logger.warn("Unable to parse timesheet hours JSON: {}", ex.getMessage());
+        }
     }
 
     private List<Week> getWeeksMondayToFridayForMonth(LocalDate monthStart, LocalDate monthEnd) {

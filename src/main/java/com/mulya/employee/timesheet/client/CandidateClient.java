@@ -68,6 +68,39 @@ public class CandidateClient {
         }
     }
 
+    public List<PlacementDetailsDto> getAllPlacements() {
+        String url = UriComponentsBuilder
+                .fromHttpUrl(candidateServiceBaseUrl + "/us-placement/placements-list")
+                .queryParam("page", 0)
+                .queryParam("size", 10000)
+                .toUriString();
+        System.out.println("Fetching all US placements from URL: " + url);
+
+        try {
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    null,
+                    new ParameterizedTypeReference<Map<String, Object>>() {}
+            );
+
+            Map<String, Object> body = response.getBody();
+            List<PlacementDetailsDto> placements = null;
+            if (body != null && body.containsKey("data")) {
+                placements = mapper.convertValue(body.get("data"), new TypeReference<List<PlacementDetailsDto>>() {});
+            }
+
+            if (placements == null) {
+                return List.of();
+            }
+            System.out.println("Successfully fetched " + placements.size() + " US placement records");
+            return placements;
+        } catch (Exception e) {
+            System.out.println("Error fetching US placements from candidate service: " + e.getMessage());
+            throw new RuntimeException("Failed to fetch US placements: " + e.getMessage());
+        }
+    }
+
     private String extractErrorMessageFromJson(String json) {
         try {
             JsonNode node = mapper.readTree(json);
